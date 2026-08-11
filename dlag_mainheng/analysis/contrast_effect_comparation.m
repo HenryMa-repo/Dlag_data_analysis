@@ -179,9 +179,9 @@ baseline_fields = {'yRecon_use_all'};
 
 % Compared fields used on y-axis.
 comparation_fields = { ...
-'yRecon_use_within_model_ts_v0_v120',...
-'yRecon_use_within_model_ts_v120_v300',...
-'yRecon_use_within_model_ts_v300_inf'};
+'yRecon_use_across',...
+'yRecon_use_within',...
+};
 
 
 % Metrics to compare.
@@ -197,7 +197,7 @@ comparation_fields = { ...
 % metrics = {'CMI'};
 % metrics = {'dHL'};
 % metrics = {'dHL', 'CMI'};
-metrics = {'CMI'};
+metrics = {'CMI2'};
 
 % Optional manual group names.
 % If empty, use contrast_effect_result.group_names if available.
@@ -786,11 +786,12 @@ end
 function metrics = normalize_metric_list_local(metrics)
 metrics = normalize_field_list_local(metrics, 'metrics');
 
-valid_metrics = {'dHL', 'CMI'};
+valid_metrics = {'dHL', 'CMI', 'CMI2'};
 
 for i = 1:numel(metrics)
     if ~ismember(metrics{i}, valid_metrics)
-        error('Unknown metric: %s. Valid metrics are dHL and CMI.', metrics{i});
+        error('Unknown metric: %s. Valid metrics are dHL, CMI, and CMI2.', ...
+            metrics{i});
     end
 end
 end
@@ -1164,6 +1165,9 @@ switch metric_name
 
     case 'CMI'
         result_field = 'CMI';
+
+    case 'CMI2'
+        result_field = 'CMI2';
 
     otherwise
         error('Unknown metric name: %s.', metric_name);
