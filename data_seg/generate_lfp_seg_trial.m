@@ -45,6 +45,10 @@ stimTag = { ...
     '[dir12_gpl_2_200isi_fixedphase]', ...
     '_2[Gpl2_2c_2sz_400_2_200isi]'};
 
+% First retained block after the omitted/bad Expo block.
+% Leave empty when no Expo block was omitted.
+bad_expoind = 3;
+
 % Reminder only; do not remove these channels here
 needignore_site = cell(1, max(probes) + 1);
 needignore_site{0 + 1} = [191];
@@ -164,15 +168,32 @@ end
 cumCounts = [0, cumsum(event_perexpo)];
 shift = nAllMarkers - cumCounts(end);
 
-if cumCounts(end) > nAllMarkers
-    warning('Expo sync count exceeds detected NIDQ marker count.');
+if isempty(bad_expoind)
+    if shift ~= 0
+        error(['bad_expoind is empty, but NIDQ and Expo marker counts ' ...
+            'differ by %d.'], shift);
+    end
+else
+    if ~isscalar(bad_expoind) || ...
+            bad_expoind ~= round(bad_expoind) || ...
+            bad_expoind < 1 || ...
+            bad_expoind > numel(event_perexpo)
+        error('bad_expoind must be empty or a valid block index.');
+    end
+
+    if shift < 0
+        error(['Expo marker count exceeds the NIDQ marker count by %d. ' ...
+            'The omitted-Expo shift cannot explain this.'], -shift);
+    end
 end
 
 occStart = zeros(1, numel(event_perexpo));
 occEnd   = zeros(1, numel(event_perexpo));
 
 for k = 1:numel(event_perexpo)
-    if k == 3
+    use_shift = ~isempty(bad_expoind) && k >= bad_expoind;
+
+    if use_shift
         occStart(k) = cumCounts(k)   + 1 + shift;
         occEnd(k)   = cumCounts(k+1) + shift;
     else
@@ -180,12 +201,13 @@ for k = 1:numel(event_perexpo)
         occEnd(k)   = cumCounts(k+1);
     end
 
-    if occStart(k) < 1 || occEnd(k) > nAllMarkers || occStart(k) > occEnd(k)
-        error('Invalid occurrence range for block %d: [%d, %d] of %d markers.', ...
+    if occStart(k) < 1 || ...
+            occEnd(k) > nAllMarkers || ...
+            occStart(k) > occEnd(k)
+        error('Invalid marker range for block %d: [%d, %d] of %d markers.', ...
             k, occStart(k), occEnd(k), nAllMarkers);
     end
 end
-
 %% ----------------------- Process each probe -----------------------
 
 for ip = 1:numel(probes)

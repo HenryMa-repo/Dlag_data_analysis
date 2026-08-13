@@ -37,6 +37,9 @@ stimTag = { ...
     '[dir12_gpl_2_200isi_fixedphase]', ...
     '_2[Gpl2_2c_2sz_400_2_200isi]'};
 
+% First retained block after the omitted/bad Expo block.
+% Leave empty when no Expo block was omitted.
+bad_expoind = 3;
 %% ----------------------- Build shared session paths -----------------------
 
 run_g   = sprintf('%s_g%d', runName, runind);
@@ -130,8 +133,28 @@ cumCounts = [0, cumsum(event_perexpo)];
 % If NIDQ has extra leading events relative to Expo, shift later indexing
 shift = size(eventunit_time, 1) - cumCounts(end);
 
-if cumCounts(end) > size(eventunit_time, 1)
-    warning('Unequal number of syncs in expo and the nidq files');
+% if cumCounts(end) > size(eventunit_time, 1)
+%     warning('Unequal number of syncs in expo and the nidq files');
+% end
+
+
+if isempty(bad_expoind)
+    if shift ~= 0
+        error(['bad_expoind is empty, but NIDQ and Expo marker counts ' ...
+            'differ by %d.'], shift);
+    end
+else
+    if ~isscalar(bad_expoind) || ...
+            bad_expoind ~= round(bad_expoind) || ...
+            bad_expoind < 1 || ...
+            bad_expoind > numel(event_perexpo)
+        error('bad_expoind must be empty or a valid block index.');
+    end
+
+    if shift < 0
+        error(['Expo marker count exceeds the NIDQ marker count by %d. ' ...
+            'The omitted-Expo shift cannot explain this.'], -shift);
+    end
 end
 
 % occStart / occEnd define the event index range for each block
@@ -142,16 +165,19 @@ expotime = cell(1, numel(event_perexpo));
 nidqtime = cell(1, numel(event_perexpo));
 
 for k = 1:numel(event_perexpo)
-
-    % Custom alignment rule kept from your current logic:
+     
     % block 3 is shifted by "shift", other blocks are not
-    if k == 3
+
+    use_shift = ~isempty(bad_expoind) && k >= bad_expoind;
+
+    if use_shift
         occStart(k) = cumCounts(k)   + 1 + shift;
         occEnd(k)   = cumCounts(k+1) + shift;
     else
         occStart(k) = cumCounts(k)   + 1;
         occEnd(k)   = cumCounts(k+1);
     end
+   
 
     % Time column for this event block
     t = eventunit_time(occStart(k):occEnd(k), 2);
