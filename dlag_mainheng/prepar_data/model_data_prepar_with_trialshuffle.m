@@ -10,9 +10,11 @@
 %   generated and saved.
 %
 % For each selected stim_tag:
-%   1) Select units from each probe using one of two user-defined methods.
+%   1) Select units from each probe using FR, FF, and d-prime, then retain
+%      requested areas and optionally apply an RF R2 threshold.
 %   2) Read eight data types from bined_data_allruns.
-%   3) Keep only selected units in each probe.
+%   3) Within each probe, stack selected areas in pick_area order. Every
+%      probe-area pair is one model group.
 %   4) Merge probes along the unit dimension for each trial.
 %   5) Remove NaN-containing trials or neurons using user-defined strategies.
 %   6) Convert each data type from unit x trial x T into a 1 x Ntrial
@@ -30,6 +32,7 @@
 %   - unit_run_metrics.mat
 %   - unit_condition_metrics.mat
 %   - bined_data_allruns.mat
+%   - all_unit_rf_results.mat
 %
 % Original output saved in the common CatGT folder:
 %   - model_data_allruns.mat
@@ -51,11 +54,20 @@
 %       .bin_size
 %       .fr_threshold
 %       .ff_threshold
+%       .dprime_threshold
 %       .unit_selection_method
+%       .use_RF_R2_filter
+%       .RF_R2_threshold
 %       .nan_trial_strategy
+%       .group_name
+%       .group_probe
 %       .groupd
 %       .probe0_usedunit_ids
+%       .probe0_usedunit_depth_um
+%       .probe0_usedunit_groupname
 %       .probe1_usedunit_ids
+%       .probe1_usedunit_depth_um
+%       .probe1_usedunit_groupname
 %       ...
 %       .condition_fields
 %       .condition_index_per_trial_full
@@ -102,7 +114,11 @@
 %   stored for each main data field:
 %       .<data_field>_groupd
 %       .<data_field>_probe0_usedunit_ids
+%       .<data_field>_probe0_usedunit_depth_um
+%       .<data_field>_probe0_usedunit_groupname
 %       .<data_field>_probe1_usedunit_ids
+%       .<data_field>_probe1_usedunit_depth_um
+%       .<data_field>_probe1_usedunit_groupname
 %       ...
 %       .<data_field>_kept_neuron_global
 %
@@ -111,11 +127,21 @@
 %       keep units with
 %           unit_run_metrics.fr_stim >= fr_threshold
 %           unit_run_metrics.fano_factor < ff_threshold
+%           unit_run_metrics.dprime > dprime_threshold
 %
 %   method 2:
 %       keep units with
 %           unit_condition_metrics.min_fr_stim >= fr_threshold
 %           unit_condition_metrics.max_fano_factor < ff_threshold
+%           unit_condition_metrics.max_dprime > dprime_threshold
+%
+%   Both methods then keep only units whose unit_rf.area_name matches the
+%   requested pick_area for that probe. If use_RF_R2_filter is true, units
+%   must also have finite unit_rf.fit.rsquare >= RF_R2_threshold.
+%   A requested area absent from all_unit_rf_results.mat is an error. Every
+%   requested probe-area group must retain at least one unit after every
+%   applicable filtering/removal step; otherwise the script stops with an
+%   error. Empty selected groups and groupd=0 are never accepted.
 %
 % NaN trial strategies:
 %   strategy 1:
@@ -134,8 +160,8 @@
 %
 %   strategy 5:
 %       do not remove any trials; remove any neuron that contains NaN in
-%       any one of the merged data types, then update probe-specific
-%       used unit IDs and groupd accordingly
+%       any one of the merged data types, then update probe-specific used
+%       unit IDs/depth/groupname and area-based groupd accordingly
 %
 %   strategy 6:
 %       do not remove any trials; for each data type independently,
@@ -183,11 +209,19 @@
 %   by this same model_data_prepar workflow as aligned trial lists, so the
 %   script uses a shared shuffle across data versions.
 %
-%   nTrials <= 1 within a condition is left unchanged silently.
+%   nTrials <= 1 within a condition is left unchanged. If more than one
+%   group is present, the script warns because no distinct shuffle exists.
 %
-%   For nTrials == 2 and two groups, it is impossible for both groups to be
-%   non-identity and also different. The script uses swap for group 1 and
-%   identity for group 2, so cross-group pairing is still broken.
+%   Group permutations are generated jointly from powers of one random
+%   nTrials-cycle. Therefore, when nGroups <= nTrials, any two groups use
+%   different source trials at every target position.
+%
+%       nGroups < nTrials:  every group receives a distinct derangement;
+%       nGroups == nTrials: groups 1:(end-1) receive the distinct
+%                           derangements and the final group keeps identity;
+%       nGroups > nTrials:  the script warns, reuses derangements for
+%                           preceding groups, and keeps identity in the
+%                           final group.
 %
 %   By default, trial_shuffle_random_seed = [], which uses rng('shuffle').
 %   Set trial_shuffle_random_seed to a numeric scalar for reproducible
@@ -205,19 +239,27 @@
 %   5. trial_shuffle_withincondition_info records the shuffle mode, random
 %      seed mode, RNG state, and condition-wise group-specific source trial
 %      mappings used to create the shuffled control dataset.
+%   6. groupd is retained from the original output schema, but each entry now
+%      represents one probe-area group rather than one whole probe. Its order
+%      matches group_name and group_probe exactly.
 % =========================================================================
 
 clc;
 clear;
-
-addpath(genpath(fullfile('.', 'expo_tools')));
-addpath(genpath(fullfile('.', 'utils')));
 
 %% ----------------------- User parameters -----------------------
 
 probe_ksDirs = { ...
     'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec0\kilosort4_10_dedup_phy', ...
     'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec1\kilosort4_2_dedup_phy' ...
+};
+
+% Areas selected from each corresponding probe_ksDirs entry. Every selected
+% probe-area pair is one model group. Group order follows probe_ksDirs first,
+% then the area order listed inside pick_area for that probe.
+pick_area = { ...
+    {'V1'}, ...   % probe_ksDirs{1}
+    {'MT'} ...         % probe_ksDirs{2}
 };
 
 stimTag = { ...
@@ -227,6 +269,14 @@ stimTag = { ...
 
 fr_threshold = 0.5;
 ff_threshold = 5;
+% Strict comparison is used: dprime > dprime_threshold. Therefore setting
+% this threshold to 0 keeps only units with positive d-prime.
+dprime_threshold = 0.5;
+
+% RF R2 is not used as a selection criterion by default. Area labels, unit
+% depth, and RF R2 are read from all_unit_rf_results.mat in each ksDir.
+use_RF_R2_filter = false;
+RF_R2_threshold = 0.5;
 
 % Unit selection method:
 %   1 = use unit_run_metrics
@@ -260,12 +310,32 @@ for p = 1:numel(probe_ksDirs)
     probe_ksDirs{p} = char(probe_ksDirs{p});
 end
 
+pick_area = normalize_pick_area(pick_area, numel(probe_ksDirs));
+
 if ~isscalar(fr_threshold) || ~isnumeric(fr_threshold) || ~isfinite(fr_threshold)
     error('fr_threshold must be a finite numeric scalar.');
 end
 
 if ~isscalar(ff_threshold) || ~isnumeric(ff_threshold) || ~isfinite(ff_threshold)
     error('ff_threshold must be a finite numeric scalar.');
+end
+
+if ~isscalar(dprime_threshold) || ~isnumeric(dprime_threshold) || ...
+        ~isfinite(dprime_threshold)
+    error('dprime_threshold must be a finite numeric scalar.');
+end
+
+if ~(islogical(use_RF_R2_filter) || isnumeric(use_RF_R2_filter)) || ...
+        ~isscalar(use_RF_R2_filter) || ...
+        ~isfinite(double(use_RF_R2_filter)) || ...
+        ~ismember(double(use_RF_R2_filter), [0 1])
+    error('use_RF_R2_filter must be one logical scalar.');
+end
+use_RF_R2_filter = logical(use_RF_R2_filter);
+
+if ~isscalar(RF_R2_threshold) || ~isnumeric(RF_R2_threshold) || ...
+        ~isfinite(RF_R2_threshold)
+    error('RF_R2_threshold must be a finite numeric scalar.');
 end
 
 if ~(isequal(unit_selection_method, 1) || isequal(unit_selection_method, 2))
@@ -300,17 +370,28 @@ for s = 1:numel(stimTag)
     fprintf('============================================================\n');
 
     probe_data = cell(numel(probe_ksDirs), 1);
-    groupd = zeros(1, numel(probe_ksDirs));
+    groupd = zeros(1, 0);
+    group_name = cell(1, 0);
+    group_probe = zeros(1, 0);
 
     for p = 1:numel(probe_ksDirs)
         ksDir = probe_ksDirs{p};
         fprintf(' Probe %d ksDir: %s\n', p-1, ksDir);
 
         probe_data{p} = process_one_probe_one_run( ...
-            ksDir, this_stim_tag, fr_threshold, ff_threshold, unit_selection_method);
+            ksDir, this_stim_tag, pick_area{p}, p-1, ...
+            fr_threshold, ff_threshold, dprime_threshold, ...
+            unit_selection_method, use_RF_R2_filter, RF_R2_threshold);
 
-        groupd(p) = numel(probe_data{p}.used_unit_ids);
+        groupd = [groupd, probe_data{p}.groupd]; %#ok<AGROW>
+        group_name = [group_name, probe_data{p}.group_name]; %#ok<AGROW>
+        group_probe = [group_probe, probe_data{p}.group_probe]; %#ok<AGROW>
     end
+
+    assert_no_empty_selected_area_groups( ...
+        groupd, group_name, group_probe, ...
+        sprintf(['initial FF/FR/dprime/area/optional-RF-R2 filtering ', ...
+                 'for stim_tag %s'], this_stim_tag));
 
     ref = probe_data{1};
     for p = 2:numel(probe_ksDirs)
@@ -321,7 +402,8 @@ for s = 1:numel(stimTag)
 
     model_data_allruns{s} = build_model_output_for_one_run( ...
         merged, probe_data, this_stim_tag, fr_threshold, ff_threshold, ...
-        unit_selection_method, nan_trial_strategy, groupd);
+        dprime_threshold, unit_selection_method, use_RF_R2_filter, ...
+        RF_R2_threshold, nan_trial_strategy, group_name, group_probe, groupd);
 end
 
 %% ----------------------- Save original output -----------------------
@@ -353,7 +435,80 @@ fprintf('\nDone.\n');
 
 %% ======================= Local functions =======================
 
-function probe_out = process_one_probe_one_run(ksDir, stim_tag, fr_threshold, ff_threshold, unit_selection_method)
+function pick_area = normalize_pick_area(pick_area, nProbe)
+if ~iscell(pick_area) || numel(pick_area) ~= nProbe
+    error('pick_area must be a cell array with one entry per probe_ksDirs entry.');
+end
+
+pick_area = pick_area(:);
+for p = 1:nProbe
+    raw = pick_area{p};
+    if ischar(raw)
+        raw = {raw};
+    elseif isstring(raw)
+        raw = cellstr(raw(:));
+    elseif iscell(raw)
+        raw = raw(:);
+    else
+        error('pick_area{%d} must contain area names as text.', p);
+    end
+
+    if isempty(raw)
+        error('pick_area{%d} must contain at least one area name.', p);
+    end
+
+    names = cell(1, numel(raw));
+    for a = 1:numel(raw)
+        value = raw{a};
+        if isstring(value) && isscalar(value)
+            value = char(value);
+        end
+        if ~ischar(value) || isempty(strtrim(value))
+            error('pick_area{%d}{%d} must be one nonempty area name.', p, a);
+        end
+        names{a} = strtrim(value);
+    end
+
+    if numel(unique(names)) ~= numel(names)
+        error('pick_area{%d} contains duplicate area names.', p);
+    end
+    pick_area{p} = names;
+end
+end
+
+function assert_no_empty_selected_area_groups( ...
+        groupd, group_name, group_probe, filtering_context)
+groupd = double(groupd(:)');
+group_name = group_name(:)';
+group_probe = double(group_probe(:)');
+
+if numel(group_name) ~= numel(groupd) || ...
+        numel(group_probe) ~= numel(groupd)
+    error(['Cannot validate empty selected areas because group_name, ', ...
+        'group_probe, and groupd do not have the same length.']);
+end
+
+empty_group_idx = find(groupd == 0);
+if isempty(empty_group_idx)
+    return;
+end
+
+empty_group_labels = cell(1, numel(empty_group_idx));
+for k = 1:numel(empty_group_idx)
+    g = empty_group_idx(k);
+    empty_group_labels{k} = sprintf('probe %d / area %s', ...
+        group_probe(g), group_name{g});
+end
+
+error(['No units remain in the following selected probe-area group(s) ', ...
+    'after %s: %s. Every area listed in pick_area must retain at least ', ...
+    'one unit.'], filtering_context, strjoin(empty_group_labels, ', '));
+end
+
+function probe_out = process_one_probe_one_run(ksDir, stim_tag, ...
+        selected_areas, probe_index, fr_threshold, ff_threshold, ...
+        dprime_threshold, unit_selection_method, use_RF_R2_filter, ...
+        RF_R2_threshold)
 if ~isfolder(ksDir)
     error('kilosort folder does not exist: %s', ksDir);
 end
@@ -361,6 +516,7 @@ end
 run_file = fullfile(ksDir, 'unit_run_metrics.mat');
 cond_file = fullfile(ksDir, 'unit_condition_metrics.mat');
 bined_file = fullfile(ksDir, 'bined_data_allruns.mat');
+rf_file = fullfile(ksDir, 'all_unit_rf_results.mat');
 
 if ~isfile(run_file)
     error('Missing file: %s', run_file);
@@ -371,10 +527,14 @@ end
 if ~isfile(bined_file)
     error('Missing file: %s', bined_file);
 end
+if ~isfile(rf_file)
+    error('Missing file: %s', rf_file);
+end
 
 Srun = load(run_file, 'unit_run_metrics');
 Scond = load(cond_file, 'unit_condition_metrics');
 Sbined = load(bined_file, 'bined_data_allruns');
+Srf = load(rf_file, 'unit_rf');
 
 if ~isfield(Srun, 'unit_run_metrics')
     error('unit_run_metrics not found in %s', run_file);
@@ -384,6 +544,9 @@ if ~isfield(Scond, 'unit_condition_metrics')
 end
 if ~isfield(Sbined, 'bined_data_allruns')
     error('bined_data_allruns not found in %s', bined_file);
+end
+if ~isfield(Srf, 'unit_rf')
+    error('unit_rf not found in %s', rf_file);
 end
 
 unit_run_metrics = Srun.unit_run_metrics;
@@ -398,14 +561,67 @@ run_metrics = unit_run_metrics{run_idx_in_run_metrics};
 cond_metrics = unit_condition_metrics{run_idx_in_cond_metrics};
 bined_entry = bined_data_allruns{run_idx_in_bined};
 
-[used_unit_ids, ~] = select_units( ...
-    run_metrics, cond_metrics, fr_threshold, ff_threshold, unit_selection_method);
+[metric_selected_unit_ids, ~] = select_units( ...
+    run_metrics, cond_metrics, fr_threshold, ff_threshold, ...
+    dprime_threshold, unit_selection_method);
 
 if ~isfield(bined_entry, 'unit_ids')
     error('unit_ids missing in bined_data_allruns entry for stim_tag %s', stim_tag);
 end
 
 bined_unit_ids = bined_entry.unit_ids(:);
+[rf_unit_ids, rf_unit_depth_um, rf_area_name, rf_rsquare] = ...
+    get_all_unit_rf_metadata(Srf.unit_rf, rf_file);
+
+[tf_rf, idx_in_rf] = ismember(metric_selected_unit_ids, rf_unit_ids);
+if ~all(tf_rf)
+    missing_ids = metric_selected_unit_ids(~tf_rf);
+    error(['Metric-selected unit_ids not found in all_unit_rf_results.mat ' ...
+        'for stim_tag %s: %s'], ...
+        stim_tag, mat2str(missing_ids(:)'));
+end
+
+metric_depth = rf_unit_depth_um(idx_in_rf);
+metric_area_name = rf_area_name(idx_in_rf);
+metric_rsquare = rf_rsquare(idx_in_rf);
+
+nArea = numel(selected_areas);
+groupd = zeros(1, nArea);
+used_unit_ids = zeros(0, 1, 'like', metric_selected_unit_ids);
+used_unit_depth_um = zeros(0, 1);
+used_unit_groupname = cell(0, 1);
+
+for a = 1:nArea
+    this_area = selected_areas{a};
+
+    if ~any(strcmp(rf_area_name, this_area))
+        error('Requested area %s was not found in %s', this_area, rf_file);
+    end
+
+    take = strcmp(metric_area_name, this_area);
+    if use_RF_R2_filter
+        take = take & isfinite(metric_rsquare) & ...
+            metric_rsquare >= RF_R2_threshold;
+    end
+
+    this_ids = metric_selected_unit_ids(take);
+    this_depth = metric_depth(take);
+    this_groupname = metric_area_name(take);
+
+    groupd(a) = numel(this_ids);
+    if groupd(a) == 0
+        error(['Requested area %s exists in %s, but no units remain for ', ...
+            'probe %d, stim_tag %s after the requested FF/FR/dprime and ', ...
+            'optional RF R2 filters. Every requested area must retain at ', ...
+            'least one unit.'], ...
+            this_area, rf_file, probe_index, stim_tag);
+    end
+
+    used_unit_ids = [used_unit_ids; this_ids]; %#ok<AGROW>
+    used_unit_depth_um = [used_unit_depth_um; this_depth]; %#ok<AGROW>
+    used_unit_groupname = [used_unit_groupname; this_groupname]; %#ok<AGROW>
+end
+
 [tf, idx_in_bined] = ismember(used_unit_ids, bined_unit_ids);
 
 if ~all(tf)
@@ -424,6 +640,11 @@ probe_out.bin_edges = bined_entry.bin_edges;
 probe_out.bin_centers = bined_entry.bin_centers;
 probe_out.unit_ids_all = bined_unit_ids;
 probe_out.used_unit_ids = used_unit_ids(:);
+probe_out.used_unit_depth_um = used_unit_depth_um(:);
+probe_out.used_unit_groupname = used_unit_groupname(:);
+probe_out.group_name = selected_areas(:)';
+probe_out.group_probe = repmat(probe_index, 1, nArea);
+probe_out.groupd = groupd(:)';
 probe_out.condition_fields = bined_entry.condition_fields;
 probe_out.condition_index_per_trial = bined_entry.condition_index_per_trial(:);
 probe_out.conditions = bined_entry.conditions;
@@ -441,32 +662,131 @@ for k = 1:numel(data_fields)
 end
 end
 
-function [used_unit_ids, keep_idx] = select_units(run_metrics, cond_metrics, fr_threshold, ff_threshold, unit_selection_method)
+function [used_unit_ids, keep_idx] = select_units(run_metrics, cond_metrics, ...
+        fr_threshold, ff_threshold, dprime_threshold, unit_selection_method)
 switch unit_selection_method
     case 1
-        if ~isfield(run_metrics, 'unit_ids') || ~isfield(run_metrics, 'fr_stim') || ~isfield(run_metrics, 'fano_factor')
+        if ~isfield(run_metrics, 'unit_ids') || ...
+                ~isfield(run_metrics, 'fr_stim') || ...
+                ~isfield(run_metrics, 'fano_factor') || ...
+                ~isfield(run_metrics, 'dprime')
             error('unit_run_metrics entry is missing required fields for method 1.');
         end
         unit_ids = run_metrics.unit_ids(:);
         fr_metric = run_metrics.fr_stim(:);
         ff_metric = run_metrics.fano_factor(:);
+        dprime_metric = run_metrics.dprime(:);
+        validate_unit_metric_lengths( ...
+            unit_ids, fr_metric, ff_metric, dprime_metric, 1);
         keep_idx = isfinite(fr_metric) & isfinite(ff_metric) & ...
-            (fr_metric >= fr_threshold) & (ff_metric < ff_threshold);
+            isfinite(dprime_metric) & ...
+            (fr_metric >= fr_threshold) & ...
+            (ff_metric < ff_threshold) & ...
+            (dprime_metric > dprime_threshold);
         used_unit_ids = unit_ids(keep_idx);
 
     case 2
-        if ~isfield(cond_metrics, 'unit_ids') || ~isfield(cond_metrics, 'min_fr_stim') || ~isfield(cond_metrics, 'max_fano_factor')
+        if ~isfield(cond_metrics, 'unit_ids') || ...
+                ~isfield(cond_metrics, 'min_fr_stim') || ...
+                ~isfield(cond_metrics, 'max_fano_factor') || ...
+                ~isfield(cond_metrics, 'max_dprime')
             error('unit_condition_metrics entry is missing required fields for method 2.');
         end
         unit_ids = cond_metrics.unit_ids(:);
         fr_metric = cond_metrics.min_fr_stim(:);
         ff_metric = cond_metrics.max_fano_factor(:);
+        dprime_metric = cond_metrics.max_dprime(:);
+        validate_unit_metric_lengths( ...
+            unit_ids, fr_metric, ff_metric, dprime_metric, 2);
         keep_idx = isfinite(fr_metric) & isfinite(ff_metric) & ...
-            (fr_metric >= fr_threshold) & (ff_metric < ff_threshold);
+            isfinite(dprime_metric) & ...
+            (fr_metric >= fr_threshold) & ...
+            (ff_metric < ff_threshold) & ...
+            (dprime_metric > dprime_threshold);
         used_unit_ids = unit_ids(keep_idx);
 
     otherwise
         error('Unknown unit_selection_method.');
+end
+end
+
+function validate_unit_metric_lengths( ...
+        unit_ids, fr_metric, ff_metric, dprime_metric, selection_method)
+nUnit = numel(unit_ids);
+if numel(fr_metric) ~= nUnit || numel(ff_metric) ~= nUnit || ...
+        numel(dprime_metric) ~= nUnit
+    error(['Unit metric length mismatch for unit_selection_method=%d: ' ...
+        'unit_ids/FR/FF/dprime lengths are %d/%d/%d/%d.'], ...
+        selection_method, nUnit, numel(fr_metric), numel(ff_metric), ...
+        numel(dprime_metric));
+end
+if ~isnumeric(unit_ids) || any(~isfinite(double(unit_ids))) || ...
+        numel(unique(unit_ids)) ~= nUnit
+    error('unit_ids must be finite and unique for unit_selection_method=%d.', ...
+        selection_method);
+end
+end
+
+function [unit_ids, unit_depth_um, area_name, rf_rsquare] = ...
+        get_all_unit_rf_metadata(unit_rf, rf_file)
+required_fields = {'unit_ids', 'unit_depth_um', 'area_name', 'fit'};
+for k = 1:numel(required_fields)
+    f = required_fields{k};
+    if ~isfield(unit_rf, f)
+        error('unit_rf.%s is missing in %s', f, rf_file);
+    end
+end
+if ~isstruct(unit_rf.fit) || ~isfield(unit_rf.fit, 'rsquare')
+    error('unit_rf.fit.rsquare is missing in %s', rf_file);
+end
+
+unit_ids = unit_rf.unit_ids(:);
+unit_depth_um = double(unit_rf.unit_depth_um(:));
+area_name = normalize_unit_groupname(unit_rf.area_name, rf_file);
+rf_rsquare = double(unit_rf.fit.rsquare(:));
+nUnit = numel(unit_ids);
+
+if numel(unit_depth_um) ~= nUnit || numel(area_name) ~= nUnit || ...
+        numel(rf_rsquare) ~= nUnit
+    error(['unit_rf unit_ids/depth/area_name/R2 lengths do not match in %s: ' ...
+        '%d/%d/%d/%d.'], ...
+        rf_file, nUnit, numel(unit_depth_um), numel(area_name), ...
+        numel(rf_rsquare));
+end
+if ~isnumeric(unit_ids) || any(~isfinite(double(unit_ids))) || ...
+        numel(unique(unit_ids)) ~= nUnit
+    error('unit_rf.unit_ids must be finite and unique in %s', rf_file);
+end
+if any(~isfinite(unit_depth_um))
+    bad_idx = find(~isfinite(unit_depth_um));
+    show_idx = bad_idx(1:min(20, numel(bad_idx)));
+    error(['NaN/Inf unit_rf.unit_depth_um found in %s. Affected unit_ids ' ...
+        '(up to 20): %s'], ...
+        rf_file, mat2str(double(unit_ids(show_idx))'));
+end
+end
+
+function names = normalize_unit_groupname(raw_names, source_file)
+if isstring(raw_names)
+    raw_names = cellstr(raw_names(:));
+elseif ischar(raw_names)
+    raw_names = cellstr(raw_names);
+elseif iscell(raw_names)
+    raw_names = raw_names(:);
+else
+    error('unit_rf.area_name has unsupported type in %s', source_file);
+end
+
+names = cell(numel(raw_names), 1);
+for k = 1:numel(raw_names)
+    value = raw_names{k};
+    if isstring(value) && isscalar(value)
+        value = char(value);
+    end
+    if ~ischar(value) || isempty(strtrim(value))
+        error('Invalid unit_rf.area_name at row %d in %s', k, source_file);
+    end
+    names{k} = strtrim(value);
 end
 end
 
@@ -527,8 +847,22 @@ for k = 1:numel(data_fields)
 end
 end
 
-function out = build_model_output_for_one_run(merged, probe_data, stim_tag, fr_threshold, ff_threshold, unit_selection_method, nan_trial_strategy, groupd)
+function out = build_model_output_for_one_run(merged, probe_data, ...
+        stim_tag, fr_threshold, ff_threshold, dprime_threshold, ...
+        unit_selection_method, use_RF_R2_filter, RF_R2_threshold, ...
+        nan_trial_strategy, group_name, group_probe, groupd)
 data_fields = get_data_field_list();
+
+if numel(group_name) ~= numel(groupd) || ...
+        numel(group_probe) ~= numel(groupd)
+    error('group_name, group_probe, and groupd must have the same length.');
+end
+assert_no_empty_selected_area_groups( ...
+    groupd, group_name, group_probe, ...
+    sprintf('initial unit filtering for stim_tag %s', stim_tag));
+if sum(groupd) ~= size(merged.(data_fields{1}), 1)
+    error('sum(groupd) does not match the merged unit dimension.');
+end
 
 out = struct();
 out.stim_tag = stim_tag;
@@ -538,15 +872,17 @@ out.bin_edges = merged.bin_edges;
 out.bin_centers = merged.bin_centers;
 out.fr_threshold = fr_threshold;
 out.ff_threshold = ff_threshold;
+out.dprime_threshold = dprime_threshold;
 out.unit_selection_method = unit_selection_method;
+out.use_RF_R2_filter = use_RF_R2_filter;
+out.RF_R2_threshold = RF_R2_threshold;
 out.nan_trial_strategy = nan_trial_strategy;
+out.group_name = group_name(:)';
+out.group_probe = group_probe(:)';
 
 if nan_trial_strategy ~= 6
     out.groupd = groupd(:)';
-    for p = 1:numel(probe_data)
-        field_name = sprintf('probe%d_usedunit_ids', p-1);
-        out.(field_name) = probe_data{p}.used_unit_ids(:);
-    end
+    out = store_probe_unit_metadata(out, probe_data, '');
 end
 
 out.condition_fields = merged.condition_fields;
@@ -610,13 +946,14 @@ switch nan_trial_strategy
         if ~any(keep_neuron)
             error('After nan_trial_strategy = 5, no neurons remain for stim_tag %s.', stim_tag);
         end
-        [new_probe_unit_ids, new_groupd] = update_probe_unit_ids_after_neuron_removal( ...
+        [new_probe_metadata, new_groupd] = ...
+            update_probe_metadata_after_neuron_removal( ...
             probe_data, groupd, keep_neuron);
+        assert_no_empty_selected_area_groups( ...
+            new_groupd, group_name, group_probe, ...
+            sprintf('nan_trial_strategy = 5 for stim_tag %s', stim_tag));
         out.groupd = new_groupd(:)';
-        for p = 1:numel(new_probe_unit_ids)
-            field_name = sprintf('probe%d_usedunit_ids', p-1);
-            out.(field_name) = new_probe_unit_ids{p}(:);
-        end
+        out = store_probe_unit_metadata(out, new_probe_metadata, '');
         keep_trial_ids = 1:out.n_trials_full;
         out.kept_trial_ids_global = keep_trial_ids;
         out.kept_neuron_global = find(keep_neuron(:))';
@@ -635,14 +972,20 @@ switch nan_trial_strategy
             X = merged.(f);
             bad_neuron = get_bad_neuron_mask(X);
             keep_neuron = ~bad_neuron;
-            [new_probe_unit_ids, new_groupd] = update_probe_unit_ids_after_neuron_removal( ...
+            if ~any(keep_neuron)
+                error(['After nan_trial_strategy = 6, no neurons remain ', ...
+                    'for field %s, stim_tag %s.'], f, stim_tag);
+            end
+            [new_probe_metadata, new_groupd] = ...
+                update_probe_metadata_after_neuron_removal( ...
                 probe_data, groupd, keep_neuron);
+            assert_no_empty_selected_area_groups( ...
+                new_groupd, group_name, group_probe, ...
+                sprintf('nan_trial_strategy = 6, field %s, stim_tag %s', ...
+                    f, stim_tag));
             groupd_field = sprintf('%s_groupd', f);
             out.(groupd_field) = new_groupd(:)';
-            for p = 1:numel(new_probe_unit_ids)
-                unit_field_name = sprintf('%s_probe%d_usedunit_ids', f, p-1);
-                out.(unit_field_name) = new_probe_unit_ids{p}(:);
-            end
+            out = store_probe_unit_metadata(out, new_probe_metadata, f);
             kept_neuron_field = sprintf('%s_kept_neuron_global', f);
             out.(kept_neuron_field) = find(keep_neuron(:))';
             X = X(keep_neuron, :, :);
@@ -798,18 +1141,72 @@ bad_neuron = squeeze(any(any(isnan(X), 2), 3));
 bad_neuron = bad_neuron(:);
 end
 
-function [new_probe_unit_ids, new_groupd] = update_probe_unit_ids_after_neuron_removal(probe_data, old_groupd, keep_neuron)
-new_probe_unit_ids = cell(numel(probe_data), 1);
-new_groupd = zeros(1, numel(probe_data));
-row_start = 1;
+function out = store_probe_unit_metadata(out, probe_metadata, field_prefix)
+for p = 1:numel(probe_metadata)
+    ids = probe_metadata{p}.used_unit_ids(:);
+    depth = double(probe_metadata{p}.used_unit_depth_um(:));
+    groupname = probe_metadata{p}.used_unit_groupname(:);
 
-for p = 1:numel(probe_data)
-    row_end = row_start + old_groupd(p) - 1;
-    this_keep = keep_neuron(row_start:row_end);
-    this_ids = probe_data{p}.used_unit_ids(:);
-    new_probe_unit_ids{p} = this_ids(this_keep);
-    new_groupd(p) = numel(new_probe_unit_ids{p});
+    if numel(depth) ~= numel(ids) || numel(groupname) ~= numel(ids)
+        error(['Probe %d used-unit IDs, depth, and groupname must have ' ...
+            'the same length.'], p-1);
+    end
+
+    if isempty(field_prefix)
+        base_name = sprintf('probe%d', p-1);
+    else
+        base_name = sprintf('%s_probe%d', field_prefix, p-1);
+    end
+
+    out.(sprintf('%s_usedunit_ids', base_name)) = ids;
+    out.(sprintf('%s_usedunit_depth_um', base_name)) = depth;
+    out.(sprintf('%s_usedunit_groupname', base_name)) = groupname;
+end
+end
+
+function [new_probe_metadata, new_groupd] = ...
+        update_probe_metadata_after_neuron_removal( ...
+        probe_data, old_groupd, keep_neuron)
+keep_neuron = logical(keep_neuron(:));
+if numel(keep_neuron) ~= sum(old_groupd)
+    error('keep_neuron length does not match sum(old_groupd).');
+end
+
+new_groupd = zeros(size(old_groupd));
+row_start = 1;
+for g = 1:numel(old_groupd)
+    row_end = row_start + old_groupd(g) - 1;
+    new_groupd(g) = sum(keep_neuron(row_start:row_end));
     row_start = row_end + 1;
+end
+
+new_probe_metadata = cell(numel(probe_data), 1);
+row_start = 1;
+for p = 1:numel(probe_data)
+    ids = probe_data{p}.used_unit_ids(:);
+    depth = double(probe_data{p}.used_unit_depth_um(:));
+    groupname = probe_data{p}.used_unit_groupname(:);
+    nProbeUnit = numel(ids);
+
+    if numel(depth) ~= nProbeUnit || numel(groupname) ~= nProbeUnit
+        error(['Probe %d used-unit IDs, depth, and groupname must have ' ...
+            'the same length before neuron removal.'], p-1);
+    end
+
+    row_end = row_start + nProbeUnit - 1;
+    this_keep = keep_neuron(row_start:row_end);
+
+    this_meta = struct();
+    this_meta.used_unit_ids = ids(this_keep);
+    this_meta.used_unit_depth_um = depth(this_keep);
+    this_meta.used_unit_groupname = groupname(this_keep);
+    new_probe_metadata{p} = this_meta;
+
+    row_start = row_end + 1;
+end
+
+if row_start - 1 ~= numel(keep_neuron)
+    error('Probe metadata row count does not match keep_neuron length.');
 end
 end
 
@@ -1069,83 +1466,84 @@ base = 1:n_trials;
 perms = cell(1, n_groups);
 
 if n_trials <= 1
+    if n_groups > n_trials
+        warn_more_groups_than_trials_for_shuffle(n_trials, n_groups);
+    end
     for g = 1:n_groups
         perms{g} = base;
     end
     return;
 end
 
-if n_trials == 2
-    if n_groups == 1
-        perms{1} = [2 1];
-    else
-        perms{1} = [2 1];
-        perms{2} = [1 2];
-        for g = 3:n_groups
-            if mod(g, 2) == 1
-                perms{g} = [2 1];
-            else
-                perms{g} = [1 2];
-            end
-        end
+if n_groups > n_trials
+    warn_more_groups_than_trials_for_shuffle(n_trials, n_groups);
+end
+perms = joint_cyclic_group_permutations_for_shuffle(n_trials, n_groups);
+end
+
+function perms = joint_cyclic_group_permutations_for_shuffle(n_trials, n_groups)
+base = 1:n_trials;
+perms = cell(1, n_groups);
+
+% Conjugating a cyclic shift by a random trial order produces a random
+% nTrials-cycle. Its nonzero powers are derangements and any two different
+% powers are elementwise different.
+cycle_order = randperm(n_trials);
+cycle_map = zeros(1, n_trials);
+cycle_map(cycle_order) = cycle_order([2:end 1]);
+
+if n_groups < n_trials
+    n_shuffled_groups = n_groups;
+    keep_final_identity = false;
+else
+    n_shuffled_groups = n_groups - 1;
+    keep_final_identity = true;
+end
+
+power_order = randperm(n_trials - 1);
+power_sequence = repmat(power_order, 1, ...
+    ceil(n_shuffled_groups / (n_trials - 1)));
+power_sequence = power_sequence(1:n_shuffled_groups);
+
+for g = 1:n_shuffled_groups
+    p = base;
+    for step = 1:power_sequence(g)
+        p = cycle_map(p);
     end
+    perms{g} = p;
+end
+
+if keep_final_identity
+    perms{n_groups} = base;
+end
+end
+
+function warn_more_groups_than_trials_for_shuffle(n_trials, n_groups)
+% Avoid flooding the command window when many conditions have the same
+% nTrials/nGroups combination.
+persistent warned_combinations
+if isempty(warned_combinations)
+    warned_combinations = {};
+end
+
+warning_key = sprintf('%d_%d', n_trials, n_groups);
+if any(strcmp(warned_combinations, warning_key))
     return;
 end
 
-perms{1} = random_derangement_for_shuffle(n_trials);
-for g = 2:n_groups
-    perms{g} = random_derangement_different_from_previous_for_shuffle(n_trials, perms(1:g-1));
+if n_trials <= 1
+    warning('model_data_prepar_with_trialshuffle:MoreGroupsThanTrials', ...
+        ['n_groups (%d) > n_trials (%d). Joint elementwise-distinct ', ...
+         'group permutations are impossible; all groups retain the only ', ...
+         'available trial order.'], n_groups, n_trials);
+else
+    warning('model_data_prepar_with_trialshuffle:MoreGroupsThanTrials', ...
+        ['n_groups (%d) > n_trials (%d). Joint elementwise-distinct ', ...
+         'group permutations are impossible. Non-identity cyclic ', ...
+         'permutations are reused for preceding groups, and the final ', ...
+         'group retains the identity trial order.'], n_groups, n_trials);
 end
-end
-
-function p = random_derangement_for_shuffle(n_trials)
-base = 1:n_trials;
-max_attempts = 10000;
-
-for attempt = 1:max_attempts %#ok<NASGU>
-    p = randperm(n_trials);
-    if all(p ~= base)
-        return;
-    end
-end
-
-p = [2:n_trials 1];
-end
-
-function p = random_derangement_different_from_previous_for_shuffle(n_trials, previous_perms)
-base = 1:n_trials;
-max_attempts = 10000;
-
-for attempt = 1:max_attempts %#ok<NASGU>
-    p = randperm(n_trials);
-    if any(p == base)
-        continue;
-    end
-
-    ok = true;
-    for j = 1:numel(previous_perms)
-        if any(p == previous_perms{j})
-            ok = false;
-            break;
-        end
-    end
-
-    if ok
-        return;
-    end
-end
-
-p = n_trials:-1:1;
-if any(p == base)
-    p = [2:n_trials 1];
-end
-
-for j = 1:numel(previous_perms)
-    if any(p == previous_perms{j})
-        error(['Could not construct a group-specific permutation that is both ', ...
-               'non-identity and elementwise different from previous groups for n_trials = %d.'], n_trials);
-    end
-end
+warned_combinations{end + 1} = warning_key;
 end
 
 function trial_struct_array = apply_shuffle_to_trial_struct_for_field(trial_struct_array, groupd, run_shuffle, field_name, run_index)
