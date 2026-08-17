@@ -138,10 +138,10 @@
 %   Both methods then keep only units whose unit_rf.area_name matches the
 %   requested pick_area for that probe. If use_RF_R2_filter is true, units
 %   must also have finite unit_rf.fit.rsquare >= RF_R2_threshold.
-%   A requested area absent from all_unit_rf_results.mat is an error. Every
+%   A requested area absent from all_unit_rf_results.mat is an warning. Every
 %   requested probe-area group must retain at least one unit after every
-%   applicable filtering/removal step; otherwise the script stops with an
-%   error. Empty selected groups and groupd=0 are never accepted.
+%   applicable filtering/removal step; otherwise warning.
+%   Empty selected groups and groupd=0 are never accepted.
 %
 % NaN trial strategies:
 %   strategy 1:
@@ -500,7 +500,7 @@ for k = 1:numel(empty_group_idx)
         group_probe(g), group_name{g});
 end
 
-error(['No units remain in the following selected probe-area group(s) ', ...
+warning(['No units remain in the following selected probe-area group(s) ', ...
     'after %s: %s. Every area listed in pick_area must retain at least ', ...
     'one unit.'], filtering_context, strjoin(empty_group_labels, ', '));
 end
@@ -610,7 +610,7 @@ for a = 1:nArea
 
     groupd(a) = numel(this_ids);
     if groupd(a) == 0
-        error(['Requested area %s exists in %s, but no units remain for ', ...
+        warning(['Requested area %s exists in %s, but no units remain for ', ...
             'probe %d, stim_tag %s after the requested FF/FR/dprime and ', ...
             'optional RF R2 filters. Every requested area must retain at ', ...
             'least one unit.'], ...
