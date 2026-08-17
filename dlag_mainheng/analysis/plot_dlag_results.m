@@ -8,6 +8,7 @@ load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'raw_count';  
 data_condtion=[1:16];
+usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -117,7 +118,16 @@ exportgraphics(gcf, [tempfname,'/FA_cv_results.png'])
 
 % Collect the optimal total dimensionality for each group.
 numGroups = length(yDims);
+xDim_total_fa = nan(1,numGroups);
+for groupIdx = 1:numGroups
+    xDim_total_fa(groupIdx) = cvResults{groupIdx}(bestModels(groupIdx)).xDim;
+end
 
+if usebest==1
+
+xDims_grid = construct_xDimsGrid(xDim_total_fa);
+
+elseif  usebest==0
 %% here we are not use bestmodel, we use bestmodel with full data (cvResults.estParams), do LL' decomposition, to get lowest d can explain 0.95 shared var
 %% code modified  decomposition and choose optd modified  CrossValFa and FactorAnalysisModelSelect(semedo paper)
 csve=cell(length(yDims),1); %cumulative shared variance explained by the latent dimensions
@@ -155,8 +165,8 @@ plotCSVEvsDim(csve, xDims, xDim_opt_fa);
 savefig([tempfname,'/FA_cv_95dresults.fig'])
 exportgraphics(gcf, [tempfname,'/FA_cv_95dresults.png'])
 
-
 xDims_grid = construct_xDimsGrid(xDim_opt_fa);
+end
 %% Inspect cross-validation results
 % Retrieve cross-validated results for all models in the results directory
 [cvResults, ~] = getCrossValResults_dlag(runIdx, 'baseDir', baseDir);

@@ -10,6 +10,8 @@ load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'demean_count_within_trial';  
 data_condtion=[2:16];
+usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
+
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -193,12 +195,16 @@ plotCSVEvsDim(csve, xDims, xDim_opt_fa);
 % Change other input arguments as appropriate
 runIdx = 1;
 numFolds = 4;
-maxIters = 1000; % Limit EM iterations during cross-validation for speedup
+maxIters = 10000; % Limit EM iterations during cross-validation for speedup
 fitAll = false; % Don't fit a model to all train data
+
+if usebest==1
 % Determine DLAG models that satisfy the FA constraints
-% xDims_grid = construct_xDimsGrid(xDim_total_fa);
+xDims_grid = construct_xDimsGrid(xDim_total_fa);
+elseif usebest==0
 %use opt d, 0.95% csve
 xDims_grid = construct_xDimsGrid(xDim_opt_fa);
+end
 
 fit_dlag(runIdx, seqTrue, ...
          'baseDir', baseDir, ...
@@ -244,7 +250,7 @@ bestModel = getNumAcrossDim_dlag(cvResults, xDims_grid);
 numFolds = 0;
 xDims_across = bestModel.xDim_across;
 xDims_within = num2cell(bestModel.xDim_within);
-maxIters = 5e3;       % Set to even higher, if desired.
+maxIters = 5e4;       % Set to even higher, if desired.
 
 fit_dlag(runIdx, seqTrue, ...
          'baseDir', baseDir, ...
