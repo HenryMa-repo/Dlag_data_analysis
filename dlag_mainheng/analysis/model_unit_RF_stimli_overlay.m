@@ -120,7 +120,7 @@ RF_R2_threshold = 0.5;
 % An ellipse exceeding either x or y limit is omitted from the readable 3-D
 % figure. The full 3-D figure still contains every valid cross-threshold fit.
 % The combined area-mean 2-D overlay does not use this filter.
-readable_size_std_multiplier = 1.5;
+readable_size_std_multiplier = 1;
 
 % Colors are positional and must follow model group order exactly:
 % all areas of probe_ksDirs{1}, followed by all areas of probe_ksDirs{2}, etc.
