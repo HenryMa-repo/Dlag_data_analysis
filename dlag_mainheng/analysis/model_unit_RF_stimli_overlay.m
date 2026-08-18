@@ -154,9 +154,9 @@ site_rf_filename = 'site_rf_results.mat';
 % Figure behavior. FIG files are saved with Visible='on', so double-clicking
 % a saved FIG opens a visible figure even if generation was hidden.
 figure_visibility = 'on';       % 'on' or 'off'
-close_figures_after_save = false;
+close_figures_after_save = true;
 save_fig_files = true;
-png_dpi = 200;
+png_dpi = 300;
 
 
 %% ----------------------- Validate basic parameters -----------------------

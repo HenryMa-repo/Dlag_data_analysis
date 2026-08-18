@@ -195,7 +195,7 @@ plotCSVEvsDim(csve, xDims, xDim_opt_fa);
 % Change other input arguments as appropriate
 runIdx = 1;
 numFolds = 4;
-maxIters = 10000; % Limit EM iterations during cross-validation for speedup
+maxIters = 1000; % Limit EM iterations during cross-validation for speedup. default is 1000
 fitAll = false; % Don't fit a model to all train data
 
 if usebest==1
@@ -250,7 +250,7 @@ bestModel = getNumAcrossDim_dlag(cvResults, xDims_grid);
 numFolds = 0;
 xDims_across = bestModel.xDim_across;
 xDims_within = num2cell(bestModel.xDim_within);
-maxIters = 5e4;       % Set to even higher, if desired.
+maxIters = 5e4;       % Set to even higher, if desired. default is 5e3
 
 fit_dlag(runIdx, seqTrue, ...
          'baseDir', baseDir, ...
