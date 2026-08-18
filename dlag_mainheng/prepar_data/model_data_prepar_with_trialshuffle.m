@@ -5,9 +5,12 @@
 %   For selected stimTag runs, prepare model-ready trial data from multiple
 %   probe-specific kilosort folders.
 %
-%   This script now also creates a within-condition trial-shuffled control
-%   dataset immediately after the original model_data_allruns dataset is
-%   generated and saved.
+%   This script also creates two within-condition trial-shuffled control
+%   datasets immediately after the original model_data_allruns dataset is
+%   generated and saved:
+%       1) group-specific trial shuffle;
+%       2) an additional unit-independent trial shuffle applied to the
+%          group-shuffled dataset.
 %
 % For each selected stim_tag:
 %   1) Select units from each probe using FR, FF, and d-prime, then retain
@@ -26,7 +29,10 @@
 %      condition-wise trial struct arrays.
 %   8) Save the original model_data_allruns.mat.
 %   9) Create a within-condition, group-specific trial-shuffled version.
-%  10) Save the shuffled control dataset as a separate .mat file.
+%  10) Save the group-shuffled control dataset as a separate .mat file.
+%  11) Starting from the group-shuffled dataset, independently shuffle the
+%      trial dimension of every unit within each condition.
+%  12) Save the unit-independently shuffled control as a third .mat file.
 %
 % Inputs required in each kilosort folder:
 %   - unit_run_metrics.mat
@@ -40,12 +46,20 @@
 % Original output variables:
 %   model_data_allruns
 %
-% Shuffled output saved in the common CatGT folder:
+% Group-shuffled output saved in the common CatGT folder:
 %   - model_data_allruns_trialshuffled_withincondition.mat
 %
-% Shuffled output variables:
+% Group-shuffled output variables:
 %   model_data_allruns
 %   trial_shuffle_withincondition_info
+%
+% Unit-independently shuffled output saved in the common CatGT folder:
+%   - model_data_allruns_trialshuffled_unit_independently_withincondition.mat
+%
+% Unit-independently shuffled output variables:
+%   model_data_allruns
+%   trial_shuffle_withincondition_info
+%   trial_shuffle_unit_independently_withincondition_info
 %
 % Output structure:
 %   model_data_allruns{i}
@@ -54,6 +68,7 @@
 %       .bin_size
 %       .fr_threshold
 %       .ff_threshold
+%       .dprime_metric
 %       .dprime_threshold
 %       .unit_selection_method
 %       .use_RF_R2_filter
@@ -128,12 +143,16 @@
 %           unit_run_metrics.fr_stim >= fr_threshold
 %           unit_run_metrics.fano_factor < ff_threshold
 %           unit_run_metrics.dprime > dprime_threshold
+%       Only dprime_metric = 'dprime' is supported because
+%       unit_run_metrics does not contain dprime_whole_time.
 %
 %   method 2:
 %       keep units with
 %           unit_condition_metrics.min_fr_stim >= fr_threshold
 %           unit_condition_metrics.max_fano_factor < ff_threshold
-%           unit_condition_metrics.max_dprime > dprime_threshold
+%           and one of the following, selected by dprime_metric:
+%               max_dprime > dprime_threshold
+%               max_dprime_whole_time > dprime_threshold
 %
 %   Both methods then keep only units whose unit_rf.area_name matches the
 %   requested pick_area for that probe. If use_RF_R2_filter is true, units
@@ -167,9 +186,10 @@
 %       do not remove any trials; for each data type independently,
 %       remove neurons that contain NaN in that data type only
 %
-% Trial-shuffle control:
-%   The shuffled dataset is generated from the original model_data_allruns
-%   already in memory, after model_data_allruns.mat is saved.
+% Trial-shuffle controls:
+%   The group-shuffled dataset is generated from the original
+%   model_data_allruns already in memory, after model_data_allruns.mat is
+%   saved.
 %
 %   Within each run and each condition, each neural group receives its own
 %   trial permutation. For a target trial t:
@@ -223,9 +243,24 @@
 %                           preceding groups, and keeps identity in the
 %                           final group.
 %
+%   The third dataset starts from the completed group-shuffled dataset.
+%   Within each run and condition, every unit then receives its own ordinary
+%   random trial permutation. The complete time course of that unit is moved
+%   together. These second-stage permutations are independent across units
+%   and use randperm directly: they do not require derangement, identity is
+%   allowed, and no elementwise-distinct constraint is imposed.
+%
+%   When trial lists and unit layouts match, the same second-stage unit
+%   permutations are shared across corresponding data versions and nanmasks.
+%   If trial lists differ (for example, nan_trial_strategy == 2) or retained
+%   unit layouts differ (for example, nan_trial_strategy == 6), each affected
+%   data version receives its own valid unit-independent shuffle.
+%
 %   By default, trial_shuffle_random_seed = [], which uses rng('shuffle').
 %   Set trial_shuffle_random_seed to a numeric scalar for reproducible
-%   shuffled output.
+%   shuffled outputs. RNG is initialized once by the group shuffle; the
+%   second-stage unit shuffle continues from the resulting RNG state. Thus
+%   adding the third output does not alter the first shuffled dataset.
 %
 % Notes:
 %   1. All probe folders must belong to the same CatGT folder.
@@ -233,17 +268,18 @@
 %      bin_size, trial count, bin count, and trial identities.
 %   3. For within-trial z-score, NaN from zero variance is common;
 %      strategy 4 and 6 are often more suitable if this data type is used.
-%   4. The shuffled .mat file intentionally saves the shuffled data using
+%   4. Both shuffled .mat files intentionally save the shuffled data using
 %      the same variable name, model_data_allruns, so downstream DLAG
-%      training scripts can load it without changing variable names.
+%      training scripts can load either one without changing variable names.
 %   5. trial_shuffle_withincondition_info records the shuffle mode, random
 %      seed mode, RNG state, and condition-wise group-specific source trial
 %      mappings used to create the shuffled control dataset.
-%   6. groupd is retained from the original output schema, but each entry now
+%   6. trial_shuffle_unit_independently_withincondition_info records the
+%      second-stage unit-specific source-trial mappings.
+%   7. groupd is retained from the original output schema, but each entry now
 %      represents one probe-area group rather than one whole probe. Its order
 %      matches group_name and group_probe exactly.
 % =========================================================================
-
 clc;
 clear;
 
@@ -253,7 +289,6 @@ probe_ksDirs = { ...
     'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec0\kilosort4_10_dedup_phy', ...
     'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec1\kilosort4_2_dedup_phy' ...
 };
-
 % Areas selected from each corresponding probe_ksDirs entry. Every selected
 % probe-area pair is one model group. Group order follows probe_ksDirs first,
 % then the area order listed inside pick_area for that probe.
@@ -269,20 +304,22 @@ stimTag = { ...
 
 fr_threshold = 0.5;
 ff_threshold = 5;
-% Strict comparison is used: dprime > dprime_threshold. Therefore setting
-% this threshold to 0 keeps only units with positive d-prime.
+% d-prime metric used for unit selection:
+%   'dprime'            = matched prestim/stim-window d-prime
+%   'dprime_whole_time' = full-stimulus FR versus prestimulus FR d-prime
+dprime_metric = 'dprime_whole_time';
+% Strict comparison is used: selected d-prime > dprime_threshold. Therefore
+% setting this threshold to 0 keeps only units with positive d-prime.
 dprime_threshold = 0.5;
 
 % RF R2 is not used as a selection criterion by default. Area labels, unit
 % depth, and RF R2 are read from all_unit_rf_results.mat in each ksDir.
 use_RF_R2_filter = false;
 RF_R2_threshold = 0.5;
-
 % Unit selection method:
 %   1 = use unit_run_metrics
 %   2 = use unit_condition_metrics
 unit_selection_method = 2;
-
 % NaN trial strategies:
 %   1 = global aligned deletion across all data types
 %   2 = each data type removes its own NaN trials independently
@@ -291,10 +328,9 @@ unit_selection_method = 2;
 %   5 = do not remove any trials; remove neurons globally across all data types
 %   6 = do not remove any trials; remove neurons independently for each data type
 nan_trial_strategy = 4;
-
-% Trial-shuffle control output:
+% Trial-shuffle control outputs:
 %   [] or omitted behavior = rng('shuffle') each time this script runs.
-%   Numeric scalar, for example 123, gives reproducible shuffle output.
+%   Numeric scalar, for example 123, gives reproducible shuffled outputs.
 trial_shuffle_random_seed = [];
 
 %% ----------------------- Validate user parameters -----------------------
@@ -302,7 +338,6 @@ trial_shuffle_random_seed = [];
 if ~iscell(probe_ksDirs) || isempty(probe_ksDirs)
     error('probe_ksDirs must be a non-empty cell array of kilosort folder paths.');
 end
-
 for p = 1:numel(probe_ksDirs)
     if ~ischar(probe_ksDirs{p}) && ~isstring(probe_ksDirs{p})
         error('probe_ksDirs{%d} must be a char or string path.', p);
@@ -315,16 +350,27 @@ pick_area = normalize_pick_area(pick_area, numel(probe_ksDirs));
 if ~isscalar(fr_threshold) || ~isnumeric(fr_threshold) || ~isfinite(fr_threshold)
     error('fr_threshold must be a finite numeric scalar.');
 end
-
 if ~isscalar(ff_threshold) || ~isnumeric(ff_threshold) || ~isfinite(ff_threshold)
     error('ff_threshold must be a finite numeric scalar.');
 end
 
+if isstring(dprime_metric) && isscalar(dprime_metric)
+    dprime_metric = char(dprime_metric);
+end
+if ~ischar(dprime_metric) || isempty(strtrim(dprime_metric))
+    error(['dprime_metric must be ''dprime'' or ', ...
+        '''dprime_whole_time''.']);
+end
+dprime_metric = strtrim(dprime_metric);
+valid_dprime_metrics = {'dprime', 'dprime_whole_time'};
+if ~ismember(dprime_metric, valid_dprime_metrics)
+    error(['Unknown dprime_metric: %s. Valid options are ''dprime'' and ', ...
+        '''dprime_whole_time''.'], dprime_metric);
+end
 if ~isscalar(dprime_threshold) || ~isnumeric(dprime_threshold) || ...
         ~isfinite(dprime_threshold)
     error('dprime_threshold must be a finite numeric scalar.');
 end
-
 if ~(islogical(use_RF_R2_filter) || isnumeric(use_RF_R2_filter)) || ...
         ~isscalar(use_RF_R2_filter) || ...
         ~isfinite(double(use_RF_R2_filter)) || ...
@@ -337,9 +383,13 @@ if ~isscalar(RF_R2_threshold) || ~isnumeric(RF_R2_threshold) || ...
         ~isfinite(RF_R2_threshold)
     error('RF_R2_threshold must be a finite numeric scalar.');
 end
-
 if ~(isequal(unit_selection_method, 1) || isequal(unit_selection_method, 2))
     error('unit_selection_method must be 1 or 2.');
+end
+if unit_selection_method == 1 && strcmp(dprime_metric, 'dprime_whole_time')
+    error(['dprime_metric = ''dprime_whole_time'' is available only with ', ...
+        'unit_selection_method = 2 because unit_run_metrics does not ', ...
+        'contain dprime_whole_time.']);
 end
 
 if ~(isequal(nan_trial_strategy, 1) || isequal(nan_trial_strategy, 2) || ...
@@ -347,7 +397,6 @@ if ~(isequal(nan_trial_strategy, 1) || isequal(nan_trial_strategy, 2) || ...
         isequal(nan_trial_strategy, 5) || isequal(nan_trial_strategy, 6))
     error('nan_trial_strategy must be 1, 2, 3, 4, 5, or 6.');
 end
-
 if ~(isempty(trial_shuffle_random_seed) || ...
         (isscalar(trial_shuffle_random_seed) && isnumeric(trial_shuffle_random_seed) && isfinite(trial_shuffle_random_seed)))
     error('trial_shuffle_random_seed must be [] or a finite numeric scalar.');
@@ -357,7 +406,6 @@ end
 
 catgt_folder = get_common_catgt_folder(probe_ksDirs);
 fprintf('Common catgt_folder: %s\n', catgt_folder);
-
 %% ----------------------- Process all selected stim tags -----------------------
 
 model_data_allruns = cell(numel(stimTag), 1);
@@ -368,7 +416,6 @@ for s = 1:numel(stimTag)
     fprintf('\n============================================================\n');
     fprintf('Processing stim_tag: %s\n', this_stim_tag);
     fprintf('============================================================\n');
-
     probe_data = cell(numel(probe_ksDirs), 1);
     groupd = zeros(1, 0);
     group_name = cell(1, 0);
@@ -380,9 +427,8 @@ for s = 1:numel(stimTag)
 
         probe_data{p} = process_one_probe_one_run( ...
             ksDir, this_stim_tag, pick_area{p}, p-1, ...
-            fr_threshold, ff_threshold, dprime_threshold, ...
+            fr_threshold, ff_threshold, dprime_metric, dprime_threshold, ...
             unit_selection_method, use_RF_R2_filter, RF_R2_threshold);
-
         groupd = [groupd, probe_data{p}.groupd]; %#ok<AGROW>
         group_name = [group_name, probe_data{p}.group_name]; %#ok<AGROW>
         group_probe = [group_probe, probe_data{p}.group_probe]; %#ok<AGROW>
@@ -392,7 +438,6 @@ for s = 1:numel(stimTag)
         groupd, group_name, group_probe, ...
         sprintf(['initial FF/FR/dprime/area/optional-RF-R2 filtering ', ...
                  'for stim_tag %s'], this_stim_tag));
-
     ref = probe_data{1};
     for p = 2:numel(probe_ksDirs)
         validate_probe_alignment(ref, probe_data{p}, this_stim_tag, p-1);
@@ -402,10 +447,10 @@ for s = 1:numel(stimTag)
 
     model_data_allruns{s} = build_model_output_for_one_run( ...
         merged, probe_data, this_stim_tag, fr_threshold, ff_threshold, ...
-        dprime_threshold, unit_selection_method, use_RF_R2_filter, ...
-        RF_R2_threshold, nan_trial_strategy, group_name, group_probe, groupd);
+        dprime_metric, dprime_threshold, unit_selection_method, ...
+        use_RF_R2_filter, RF_R2_threshold, nan_trial_strategy, ...
+        group_name, group_probe, groupd);
 end
-
 %% ----------------------- Save original output -----------------------
 
 original_output_file = fullfile(catgt_folder, 'model_data_allruns.mat');
@@ -415,7 +460,6 @@ fprintf('\nSaved original model data:\n');
 fprintf(' %s\n', original_output_file);
 
 %% ----------------------- Create and save trial-shuffled output -----------------------
-
 [model_data_allruns_shuffled, trial_shuffle_withincondition_info] = ...
     make_trialshuffled_model_data_allruns( ...
         model_data_allruns, original_output_file, ...
@@ -424,11 +468,29 @@ fprintf(' %s\n', original_output_file);
 
 model_data_allruns = model_data_allruns_shuffled;
 shuffle_output_file = trial_shuffle_withincondition_info.output_file;
-
 save(shuffle_output_file, 'model_data_allruns', 'trial_shuffle_withincondition_info', '-v7.3');
 
 fprintf('\nSaved trial-shuffled model data:\n');
 fprintf(' %s\n', shuffle_output_file);
+
+%% ----------------------- Create and save unit-independent shuffled output -----------------------
+[model_data_allruns_unit_independently_shuffled, ...
+        trial_shuffle_unit_independently_withincondition_info] = ...
+    make_unit_independently_trialshuffled_model_data_allruns( ...
+        model_data_allruns_shuffled, shuffle_output_file, ...
+        fullfile(catgt_folder, ...
+            'model_data_allruns_trialshuffled_unit_independently_withincondition.mat'), ...
+        trial_shuffle_random_seed);
+
+model_data_allruns = model_data_allruns_unit_independently_shuffled;
+unit_independent_shuffle_output_file = ...
+    trial_shuffle_unit_independently_withincondition_info.output_file;
+save(unit_independent_shuffle_output_file, 'model_data_allruns', ...
+    'trial_shuffle_withincondition_info', ...
+    'trial_shuffle_unit_independently_withincondition_info', '-v7.3');
+
+fprintf('\nSaved unit-independently trial-shuffled model data:\n');
+fprintf(' %s\n', unit_independent_shuffle_output_file);
 
 
 fprintf('\nDone.\n');
@@ -439,7 +501,6 @@ function pick_area = normalize_pick_area(pick_area, nProbe)
 if ~iscell(pick_area) || numel(pick_area) ~= nProbe
     error('pick_area must be a cell array with one entry per probe_ksDirs entry.');
 end
-
 pick_area = pick_area(:);
 for p = 1:nProbe
     raw = pick_area{p};
@@ -456,7 +517,6 @@ for p = 1:nProbe
     if isempty(raw)
         error('pick_area{%d} must contain at least one area name.', p);
     end
-
     names = cell(1, numel(raw));
     for a = 1:numel(raw)
         value = raw{a};
@@ -468,7 +528,6 @@ for p = 1:nProbe
         end
         names{a} = strtrim(value);
     end
-
     if numel(unique(names)) ~= numel(names)
         error('pick_area{%d} contains duplicate area names.', p);
     end
@@ -481,7 +540,6 @@ function assert_no_empty_selected_area_groups( ...
 groupd = double(groupd(:)');
 group_name = group_name(:)';
 group_probe = double(group_probe(:)');
-
 if numel(group_name) ~= numel(groupd) || ...
         numel(group_probe) ~= numel(groupd)
     error(['Cannot validate empty selected areas because group_name, ', ...
@@ -492,7 +550,6 @@ empty_group_idx = find(groupd == 0);
 if isempty(empty_group_idx)
     return;
 end
-
 empty_group_labels = cell(1, numel(empty_group_idx));
 for k = 1:numel(empty_group_idx)
     g = empty_group_idx(k);
@@ -504,15 +561,13 @@ warning(['No units remain in the following selected probe-area group(s) ', ...
     'after %s: %s. Every area listed in pick_area must retain at least ', ...
     'one unit.'], filtering_context, strjoin(empty_group_labels, ', '));
 end
-
 function probe_out = process_one_probe_one_run(ksDir, stim_tag, ...
         selected_areas, probe_index, fr_threshold, ff_threshold, ...
-        dprime_threshold, unit_selection_method, use_RF_R2_filter, ...
-        RF_R2_threshold)
+        dprime_metric, dprime_threshold, unit_selection_method, ...
+        use_RF_R2_filter, RF_R2_threshold)
 if ~isfolder(ksDir)
     error('kilosort folder does not exist: %s', ksDir);
 end
-
 run_file = fullfile(ksDir, 'unit_run_metrics.mat');
 cond_file = fullfile(ksDir, 'unit_condition_metrics.mat');
 bined_file = fullfile(ksDir, 'bined_data_allruns.mat');
@@ -530,12 +585,10 @@ end
 if ~isfile(rf_file)
     error('Missing file: %s', rf_file);
 end
-
 Srun = load(run_file, 'unit_run_metrics');
 Scond = load(cond_file, 'unit_condition_metrics');
 Sbined = load(bined_file, 'bined_data_allruns');
 Srf = load(rf_file, 'unit_rf');
-
 if ~isfield(Srun, 'unit_run_metrics')
     error('unit_run_metrics not found in %s', run_file);
 end
@@ -548,7 +601,6 @@ end
 if ~isfield(Srf, 'unit_rf')
     error('unit_rf not found in %s', rf_file);
 end
-
 unit_run_metrics = Srun.unit_run_metrics;
 unit_condition_metrics = Scond.unit_condition_metrics;
 bined_data_allruns = Sbined.bined_data_allruns;
@@ -556,19 +608,17 @@ bined_data_allruns = Sbined.bined_data_allruns;
 run_idx_in_run_metrics = find_run_index_by_stim_tag(unit_run_metrics, stim_tag);
 run_idx_in_cond_metrics = find_run_index_by_stim_tag(unit_condition_metrics, stim_tag);
 run_idx_in_bined = find_run_index_by_stim_tag(bined_data_allruns, stim_tag);
-
 run_metrics = unit_run_metrics{run_idx_in_run_metrics};
 cond_metrics = unit_condition_metrics{run_idx_in_cond_metrics};
 bined_entry = bined_data_allruns{run_idx_in_bined};
 
 [metric_selected_unit_ids, ~] = select_units( ...
     run_metrics, cond_metrics, fr_threshold, ff_threshold, ...
-    dprime_threshold, unit_selection_method);
+    dprime_metric, dprime_threshold, unit_selection_method);
 
 if ~isfield(bined_entry, 'unit_ids')
     error('unit_ids missing in bined_data_allruns entry for stim_tag %s', stim_tag);
 end
-
 bined_unit_ids = bined_entry.unit_ids(:);
 [rf_unit_ids, rf_unit_depth_um, rf_area_name, rf_rsquare] = ...
     get_all_unit_rf_metadata(Srf.unit_rf, rf_file);
@@ -580,7 +630,6 @@ if ~all(tf_rf)
         'for stim_tag %s: %s'], ...
         stim_tag, mat2str(missing_ids(:)'));
 end
-
 metric_depth = rf_unit_depth_um(idx_in_rf);
 metric_area_name = rf_area_name(idx_in_rf);
 metric_rsquare = rf_rsquare(idx_in_rf);
@@ -597,7 +646,6 @@ for a = 1:nArea
     if ~any(strcmp(rf_area_name, this_area))
         error('Requested area %s was not found in %s', this_area, rf_file);
     end
-
     take = strcmp(metric_area_name, this_area);
     if use_RF_R2_filter
         take = take & isfinite(metric_rsquare) & ...
@@ -607,7 +655,6 @@ for a = 1:nArea
     this_ids = metric_selected_unit_ids(take);
     this_depth = metric_depth(take);
     this_groupname = metric_area_name(take);
-
     groupd(a) = numel(this_ids);
     if groupd(a) == 0
         warning(['Requested area %s exists in %s, but no units remain for ', ...
@@ -616,7 +663,6 @@ for a = 1:nArea
             'least one unit.'], ...
             this_area, rf_file, probe_index, stim_tag);
     end
-
     used_unit_ids = [used_unit_ids; this_ids]; %#ok<AGROW>
     used_unit_depth_um = [used_unit_depth_um; this_depth]; %#ok<AGROW>
     used_unit_groupname = [used_unit_groupname; this_groupname]; %#ok<AGROW>
@@ -631,7 +677,6 @@ if ~all(tf)
 end
 
 data_fields = get_data_field_list();
-
 probe_out = struct();
 probe_out.stim_tag = stim_tag;
 probe_out.analysis_window = bined_entry.analysis_window;
@@ -648,7 +693,6 @@ probe_out.groupd = groupd(:)';
 probe_out.condition_fields = bined_entry.condition_fields;
 probe_out.condition_index_per_trial = bined_entry.condition_index_per_trial(:);
 probe_out.conditions = bined_entry.conditions;
-
 for k = 1:numel(data_fields)
     f = data_fields{k};
     if ~isfield(bined_entry, f)
@@ -661,11 +705,16 @@ for k = 1:numel(data_fields)
     probe_out.(f) = X(idx_in_bined, :, :);
 end
 end
-
 function [used_unit_ids, keep_idx] = select_units(run_metrics, cond_metrics, ...
-        fr_threshold, ff_threshold, dprime_threshold, unit_selection_method)
+        fr_threshold, ff_threshold, dprime_metric_name, dprime_threshold, ...
+        unit_selection_method)
 switch unit_selection_method
     case 1
+        if ~strcmp(dprime_metric_name, 'dprime')
+            error(['unit_selection_method = 1 supports only ', ...
+                'dprime_metric = ''dprime''. Use unit_selection_method = 2 ', ...
+                'for dprime_whole_time.']);
+        end
         if ~isfield(run_metrics, 'unit_ids') || ...
                 ~isfield(run_metrics, 'fr_stim') || ...
                 ~isfield(run_metrics, 'fano_factor') || ...
@@ -675,41 +724,47 @@ switch unit_selection_method
         unit_ids = run_metrics.unit_ids(:);
         fr_metric = run_metrics.fr_stim(:);
         ff_metric = run_metrics.fano_factor(:);
-        dprime_metric = run_metrics.dprime(:);
+        dprime_values = run_metrics.dprime(:);
         validate_unit_metric_lengths( ...
-            unit_ids, fr_metric, ff_metric, dprime_metric, 1);
+            unit_ids, fr_metric, ff_metric, dprime_values, 1);
         keep_idx = isfinite(fr_metric) & isfinite(ff_metric) & ...
-            isfinite(dprime_metric) & ...
+            isfinite(dprime_values) & ...
             (fr_metric >= fr_threshold) & ...
             (ff_metric < ff_threshold) & ...
-            (dprime_metric > dprime_threshold);
+            (dprime_values > dprime_threshold);
         used_unit_ids = unit_ids(keep_idx);
-
     case 2
+        dprime_summary_field = sprintf('max_%s', dprime_metric_name);
         if ~isfield(cond_metrics, 'unit_ids') || ...
                 ~isfield(cond_metrics, 'min_fr_stim') || ...
-                ~isfield(cond_metrics, 'max_fano_factor') || ...
-                ~isfield(cond_metrics, 'max_dprime')
-            error('unit_condition_metrics entry is missing required fields for method 2.');
+                ~isfield(cond_metrics, 'max_fano_factor')
+            error(['unit_condition_metrics entry is missing unit_ids, ', ...
+                'min_fr_stim, or max_fano_factor required for method 2.']);
+        end
+        if ~isfield(cond_metrics, dprime_summary_field)
+            error(['unit_condition_metrics entry is missing %s required ', ...
+                'for dprime_metric = ''%s''. Recompute ', ...
+                'unit_condition_metrics with the current ', ...
+                'unit_statistic_by_condition.m.'], ...
+                dprime_summary_field, dprime_metric_name);
         end
         unit_ids = cond_metrics.unit_ids(:);
         fr_metric = cond_metrics.min_fr_stim(:);
         ff_metric = cond_metrics.max_fano_factor(:);
-        dprime_metric = cond_metrics.max_dprime(:);
+        dprime_values = cond_metrics.(dprime_summary_field);
+        dprime_values = dprime_values(:);
         validate_unit_metric_lengths( ...
-            unit_ids, fr_metric, ff_metric, dprime_metric, 2);
+            unit_ids, fr_metric, ff_metric, dprime_values, 2);
         keep_idx = isfinite(fr_metric) & isfinite(ff_metric) & ...
-            isfinite(dprime_metric) & ...
+            isfinite(dprime_values) & ...
             (fr_metric >= fr_threshold) & ...
             (ff_metric < ff_threshold) & ...
-            (dprime_metric > dprime_threshold);
+            (dprime_values > dprime_threshold);
         used_unit_ids = unit_ids(keep_idx);
-
     otherwise
         error('Unknown unit_selection_method.');
 end
 end
-
 function validate_unit_metric_lengths( ...
         unit_ids, fr_metric, ff_metric, dprime_metric, selection_method)
 nUnit = numel(unit_ids);
@@ -726,7 +781,6 @@ if ~isnumeric(unit_ids) || any(~isfinite(double(unit_ids))) || ...
         selection_method);
 end
 end
-
 function [unit_ids, unit_depth_um, area_name, rf_rsquare] = ...
         get_all_unit_rf_metadata(unit_rf, rf_file)
 required_fields = {'unit_ids', 'unit_depth_um', 'area_name', 'fit'};
@@ -739,13 +793,11 @@ end
 if ~isstruct(unit_rf.fit) || ~isfield(unit_rf.fit, 'rsquare')
     error('unit_rf.fit.rsquare is missing in %s', rf_file);
 end
-
 unit_ids = unit_rf.unit_ids(:);
 unit_depth_um = double(unit_rf.unit_depth_um(:));
 area_name = normalize_unit_groupname(unit_rf.area_name, rf_file);
 rf_rsquare = double(unit_rf.fit.rsquare(:));
 nUnit = numel(unit_ids);
-
 if numel(unit_depth_um) ~= nUnit || numel(area_name) ~= nUnit || ...
         numel(rf_rsquare) ~= nUnit
     error(['unit_rf unit_ids/depth/area_name/R2 lengths do not match in %s: ' ...
@@ -765,7 +817,6 @@ if any(~isfinite(unit_depth_um))
         rf_file, mat2str(double(unit_ids(show_idx))'));
 end
 end
-
 function names = normalize_unit_groupname(raw_names, source_file)
 if isstring(raw_names)
     raw_names = cellstr(raw_names(:));
@@ -776,7 +827,6 @@ elseif iscell(raw_names)
 else
     error('unit_rf.area_name has unsupported type in %s', source_file);
 end
-
 names = cell(numel(raw_names), 1);
 for k = 1:numel(raw_names)
     value = raw_names{k};
@@ -789,7 +839,6 @@ for k = 1:numel(raw_names)
     names{k} = strtrim(value);
 end
 end
-
 function validate_probe_alignment(ref, cur, stim_tag, probe_index)
 if ~isequal(ref.analysis_window, cur.analysis_window)
     error('analysis_window mismatch across probes for stim_tag %s (probe %d).', stim_tag, probe_index);
@@ -809,7 +858,6 @@ end
 if numel(ref.conditions) ~= numel(cur.conditions)
     error('Condition count mismatch across probes for stim_tag %s (probe %d).', stim_tag, probe_index);
 end
-
 data_fields = get_data_field_list();
 for k = 1:numel(data_fields)
     f = data_fields{k};
@@ -823,10 +871,8 @@ for k = 1:numel(data_fields)
     end
 end
 end
-
 function merged = merge_probes_for_one_run(probe_data)
 data_fields = get_data_field_list();
-
 merged = struct();
 merged.stim_tag = probe_data{1}.stim_tag;
 merged.analysis_window = probe_data{1}.analysis_window;
@@ -836,7 +882,6 @@ merged.bin_centers = probe_data{1}.bin_centers;
 merged.condition_fields = probe_data{1}.condition_fields;
 merged.condition_index_per_trial_full = probe_data{1}.condition_index_per_trial;
 merged.conditions_full = probe_data{1}.conditions;
-
 for k = 1:numel(data_fields)
     f = data_fields{k};
     Xcat = probe_data{1}.(f);
@@ -848,11 +893,10 @@ end
 end
 
 function out = build_model_output_for_one_run(merged, probe_data, ...
-        stim_tag, fr_threshold, ff_threshold, dprime_threshold, ...
-        unit_selection_method, use_RF_R2_filter, RF_R2_threshold, ...
-        nan_trial_strategy, group_name, group_probe, groupd)
+        stim_tag, fr_threshold, ff_threshold, dprime_metric, ...
+        dprime_threshold, unit_selection_method, use_RF_R2_filter, ...
+        RF_R2_threshold, nan_trial_strategy, group_name, group_probe, groupd)
 data_fields = get_data_field_list();
-
 if numel(group_name) ~= numel(groupd) || ...
         numel(group_probe) ~= numel(groupd)
     error('group_name, group_probe, and groupd must have the same length.');
@@ -863,7 +907,6 @@ assert_no_empty_selected_area_groups( ...
 if sum(groupd) ~= size(merged.(data_fields{1}), 1)
     error('sum(groupd) does not match the merged unit dimension.');
 end
-
 out = struct();
 out.stim_tag = stim_tag;
 out.analysis_window = merged.analysis_window;
@@ -872,6 +915,7 @@ out.bin_edges = merged.bin_edges;
 out.bin_centers = merged.bin_centers;
 out.fr_threshold = fr_threshold;
 out.ff_threshold = ff_threshold;
+out.dprime_metric = dprime_metric;
 out.dprime_threshold = dprime_threshold;
 out.unit_selection_method = unit_selection_method;
 out.use_RF_R2_filter = use_RF_R2_filter;
@@ -879,7 +923,6 @@ out.RF_R2_threshold = RF_R2_threshold;
 out.nan_trial_strategy = nan_trial_strategy;
 out.group_name = group_name(:)';
 out.group_probe = group_probe(:)';
-
 if nan_trial_strategy ~= 6
     out.groupd = groupd(:)';
     out = store_probe_unit_metadata(out, probe_data, '');
@@ -889,7 +932,6 @@ out.condition_fields = merged.condition_fields;
 out.condition_index_per_trial_full = merged.condition_index_per_trial_full;
 out.conditions_full = merged.conditions_full;
 out.n_trials_full = numel(merged.condition_index_per_trial_full);
-
 switch nan_trial_strategy
     case 1
         bad_trial = false(1, out.n_trials_full);
@@ -903,7 +945,6 @@ switch nan_trial_strategy
             f = data_fields{k};
             out.(f) = build_trial_struct_array(merged.(f), keep_trial_ids);
         end
-
     case 2
         for k = 1:numel(data_fields)
             f = data_fields{k};
@@ -913,7 +954,6 @@ switch nan_trial_strategy
             out.(keep_field_name) = keep_trial_ids(:)';
             out.(f) = build_trial_struct_array(merged.(f), keep_trial_ids);
         end
-
     case 3
         keep_trial_ids = 1:out.n_trials_full;
         out.kept_trial_ids_global = keep_trial_ids;
@@ -921,7 +961,6 @@ switch nan_trial_strategy
             f = data_fields{k};
             out.(f) = build_trial_struct_array(merged.(f), keep_trial_ids);
         end
-
     case 4
         keep_trial_ids = 1:out.n_trials_full;
         out.kept_trial_ids_global = keep_trial_ids;
@@ -935,7 +974,6 @@ switch nan_trial_strategy
             mask_field_name = sprintf('%s_nanmask', f);
             out.(mask_field_name) = build_trial_struct_array(nanmask, keep_trial_ids);
         end
-
     case 5
         bad_neuron = false(sum(groupd), 1);
         for k = 1:numel(data_fields)
@@ -963,7 +1001,6 @@ switch nan_trial_strategy
             X = X(keep_neuron, :, :);
             out.(f) = build_trial_struct_array(X, keep_trial_ids);
         end
-
     case 6
         keep_trial_ids = 1:out.n_trials_full;
         out.kept_trial_ids_global = keep_trial_ids;
@@ -991,7 +1028,6 @@ switch nan_trial_strategy
             X = X(keep_neuron, :, :);
             out.(f) = build_trial_struct_array(X, keep_trial_ids);
         end
-
     otherwise
         error('Unknown nan_trial_strategy.');
 end
@@ -1003,7 +1039,6 @@ if nan_trial_strategy == 4
     out = add_condition_groupings_to_output(out, mask_fields);
 end
 end
-
 function out = add_condition_groupings_to_output(out, fields_to_group)
 for k = 1:numel(fields_to_group)
     f = fields_to_group{k};
@@ -1015,7 +1050,6 @@ for k = 1:numel(fields_to_group)
         out.(f), out.conditions_full, out.condition_index_per_trial_full);
 end
 end
-
 function cond_struct = build_by_condition_struct(trial_struct_array, conditions_full, condition_index_per_trial_full)
 nCond = numel(conditions_full);
 cond_struct = repmat(struct(), 1, nCond);
@@ -1024,14 +1058,12 @@ present_trial_ids = zeros(1, numel(trial_struct_array));
 for i = 1:numel(trial_struct_array)
     present_trial_ids(i) = trial_struct_array(i).trialId;
 end
-
 for c = 1:nCond
     if isfield(conditions_full(c), 'trial_indices')
         trial_indices_full = conditions_full(c).trial_indices(:)';
     else
         trial_indices_full = find(condition_index_per_trial_full == c);
     end
-
     keep_mask = false(1, numel(trial_struct_array));
     for i = 1:numel(trial_struct_array)
         tid = trial_struct_array(i).trialId;
@@ -1043,14 +1075,12 @@ for c = 1:nCond
 
     trial_ids_present = present_trial_ids(keep_mask);
     trials_present = trial_struct_array(keep_mask);
-
     cond_struct(c).condition_index = c;
     cond_struct(c).trial_indices_full = trial_indices_full(:)';
     cond_struct(c).trial_ids_present = trial_ids_present(:)';
     cond_struct(c).n_trials_full = numel(trial_indices_full);
     cond_struct(c).n_trials_present = numel(trial_ids_present);
     cond_struct(c).trials = trials_present;
-
     fn = fieldnames(conditions_full(c));
     for j = 1:numel(fn)
         this_field = fn{j};
@@ -1068,7 +1098,6 @@ for k = 1:numel(data_fields)
     mask_fields{k} = sprintf('%s_nanmask', data_fields{k});
 end
 end
-
 function bad_trial = get_bad_trial_mask(X)
 bad_trial = squeeze(any(any(isnan(X), 1), 3));
 bad_trial = reshape(bad_trial, 1, []);
@@ -1087,7 +1116,6 @@ for i = 1:nKeep
     S(i).y = reshape(X(:, tr, :), nUnit, nBin);
 end
 end
-
 function idx = find_run_index_by_stim_tag(cell_of_structs, stim_tag)
 all_tags = cell(numel(cell_of_structs), 1);
 for i = 1:numel(cell_of_structs)
@@ -1105,7 +1133,6 @@ if numel(idx) > 1
     error('Duplicate stim_tag found: %s', stim_tag);
 end
 end
-
 function fields = get_data_field_list()
 fields = { ...
     'raw_count', ...
@@ -1117,7 +1144,6 @@ fields = { ...
     'demean_fr_within_trial', ...
     'demean_pooledsd_within_condition'};
 end
-
 function catgt_folder = get_common_catgt_folder(probe_ksDirs)
 catgt_list = cell(numel(probe_ksDirs), 1);
 for i = 1:numel(probe_ksDirs)
@@ -1126,7 +1152,6 @@ for i = 1:numel(probe_ksDirs)
     catgt_folder_i = fileparts(probe_folder);
     catgt_list{i} = catgt_folder_i;
 end
-
 catgt_folder = catgt_list{1};
 for i = 2:numel(catgt_list)
     if ~strcmp(catgt_folder, catgt_list{i})
@@ -1140,7 +1165,6 @@ function bad_neuron = get_bad_neuron_mask(X)
 bad_neuron = squeeze(any(any(isnan(X), 2), 3));
 bad_neuron = bad_neuron(:);
 end
-
 function out = store_probe_unit_metadata(out, probe_metadata, field_prefix)
 for p = 1:numel(probe_metadata)
     ids = probe_metadata{p}.used_unit_ids(:);
@@ -1151,7 +1175,6 @@ for p = 1:numel(probe_metadata)
         error(['Probe %d used-unit IDs, depth, and groupname must have ' ...
             'the same length.'], p-1);
     end
-
     if isempty(field_prefix)
         base_name = sprintf('probe%d', p-1);
     else
@@ -1163,7 +1186,6 @@ for p = 1:numel(probe_metadata)
     out.(sprintf('%s_usedunit_groupname', base_name)) = groupname;
 end
 end
-
 function [new_probe_metadata, new_groupd] = ...
         update_probe_metadata_after_neuron_removal( ...
         probe_data, old_groupd, keep_neuron)
@@ -1171,7 +1193,6 @@ keep_neuron = logical(keep_neuron(:));
 if numel(keep_neuron) ~= sum(old_groupd)
     error('keep_neuron length does not match sum(old_groupd).');
 end
-
 new_groupd = zeros(size(old_groupd));
 row_start = 1;
 for g = 1:numel(old_groupd)
@@ -1187,7 +1208,6 @@ for p = 1:numel(probe_data)
     depth = double(probe_data{p}.used_unit_depth_um(:));
     groupname = probe_data{p}.used_unit_groupname(:);
     nProbeUnit = numel(ids);
-
     if numel(depth) ~= nProbeUnit || numel(groupname) ~= nProbeUnit
         error(['Probe %d used-unit IDs, depth, and groupname must have ' ...
             'the same length before neuron removal.'], p-1);
@@ -1195,7 +1215,6 @@ for p = 1:numel(probe_data)
 
     row_end = row_start + nProbeUnit - 1;
     this_keep = keep_neuron(row_start:row_end);
-
     this_meta = struct();
     this_meta.used_unit_ids = ids(this_keep);
     this_meta.used_unit_depth_um = depth(this_keep);
@@ -1211,7 +1230,6 @@ end
 end
 
 %% ======================= Trial-shuffle local functions =======================
-
 function [model_data_allruns_shuffled, info] = make_trialshuffled_model_data_allruns(model_data_allruns, source_file, output_file, random_seed)
 if ~iscell(model_data_allruns)
     error('model_data_allruns must be a cell array.');
@@ -1226,7 +1244,6 @@ end
 if nargin < 4
     random_seed = [];
 end
-
 if isempty(random_seed)
     rng('shuffle');
     random_seed_mode = 'shuffle';
@@ -1238,7 +1255,6 @@ rng_state_after_seed_setup = rng;
 
 data_fields = get_data_field_list();
 model_data_allruns_shuffled = model_data_allruns;
-
 info = struct();
 info.source_file = source_file;
 info.output_file = output_file;
@@ -1252,14 +1268,12 @@ info.rule = [ ...
     'The group-specific permutations are shared across data versions unless ', ...
     'nan_trial_strategy == 2 produced non-identical trialId lists across main data fields.'];
 info.runs = cell(size(model_data_allruns));
-
 fprintf('\n============================================================\n');
 fprintf('Creating within-condition group-specific trial-shuffled control\n');
 fprintf('============================================================\n');
 
 for s = 1:numel(model_data_allruns_shuffled)
     this_run = model_data_allruns_shuffled{s};
-
     if isfield(this_run, 'stim_tag')
         fprintf(' Shuffling run %d/%d: %s\n', s, numel(model_data_allruns_shuffled), this_run.stim_tag);
     else
@@ -1272,7 +1286,6 @@ for s = 1:numel(model_data_allruns_shuffled)
     if isempty(main_fields)
         error('No main data fields were found in model_data_allruns{%d}.', s);
     end
-
     mask_fields = get_existing_mask_fields_for_shuffle(this_run, data_fields);
     fields_to_group_after_shuffle = [main_fields, mask_fields];
 
@@ -1287,14 +1300,12 @@ for s = 1:numel(model_data_allruns_shuffled)
     else
         run_info.nan_trial_strategy = [];
     end
-
     use_shared_shuffle = true;
     trial_id_check = struct();
     trial_id_check.checked = false;
     trial_id_check.all_main_fields_identical = true;
     trial_id_check.reference_field = main_fields{1};
     trial_id_check.different_fields = {};
-
     if isfield(this_run, 'nan_trial_strategy') && isequal(this_run.nan_trial_strategy, 2)
         trial_id_check.checked = true;
         [all_same, different_fields] = check_main_field_trial_ids_identical(this_run, main_fields);
@@ -1306,7 +1317,6 @@ for s = 1:numel(model_data_allruns_shuffled)
     end
 
     run_info.trial_id_check = trial_id_check;
-
     if use_shared_shuffle
         run_info.shuffle_mode = 'shared_across_data_versions';
         ref_field = main_fields{1};
@@ -1315,14 +1325,12 @@ for s = 1:numel(model_data_allruns_shuffled)
         n_groups = numel(ref_groupd);
         shared_info = build_run_shuffle_info_for_field(this_run, ref_trial_ids, n_groups, ref_field);
         run_info.shared_shuffle = shared_info;
-
         for k = 1:numel(main_fields)
             f = main_fields{k};
             groupd = get_groupd_for_shuffle(this_run, f);
             this_run.(f) = apply_shuffle_to_trial_struct_for_field( ...
                 this_run.(f), groupd, shared_info, f, s);
         end
-
         for k = 1:numel(mask_fields)
             f = mask_fields{k};
             groupd = get_groupd_for_shuffle(this_run, f);
@@ -1332,7 +1340,6 @@ for s = 1:numel(model_data_allruns_shuffled)
     else
         run_info.shuffle_mode = 'per_data_version';
         run_info.field_shuffle = struct();
-
         for k = 1:numel(main_fields)
             f = main_fields{k};
             trial_ids = get_trial_ids_for_shuffle(this_run.(f));
@@ -1342,7 +1349,6 @@ for s = 1:numel(model_data_allruns_shuffled)
 
             this_run.(f) = apply_shuffle_to_trial_struct_for_field( ...
                 this_run.(f), groupd, field_info, f, s);
-
             mask_field = sprintf('%s_nanmask', f);
             if isfield(this_run, mask_field)
                 mask_groupd = get_groupd_for_shuffle(this_run, mask_field);
@@ -1353,7 +1359,6 @@ for s = 1:numel(model_data_allruns_shuffled)
     end
 
     this_run = rebuild_by_condition_fields_after_shuffle(this_run, fields_to_group_after_shuffle);
-
     model_data_allruns_shuffled{s} = this_run;
     info.runs{s} = run_info;
 end
@@ -1368,7 +1373,6 @@ for k = 1:numel(data_fields)
     end
 end
 end
-
 function validate_run_has_required_condition_fields_for_shuffle(run_entry, run_index)
 if ~isfield(run_entry, 'condition_index_per_trial_full')
     error('condition_index_per_trial_full is missing in model_data_allruns{%d}.', run_index);
@@ -1377,7 +1381,6 @@ if ~isfield(run_entry, 'conditions_full')
     error('conditions_full is missing in model_data_allruns{%d}.', run_index);
 end
 end
-
 function [all_same, different_fields] = check_main_field_trial_ids_identical(run_entry, main_fields)
 ref_field = main_fields{1};
 ref_ids = get_trial_ids_for_shuffle(run_entry.(ref_field));
@@ -1393,7 +1396,6 @@ for k = 2:numel(main_fields)
     end
 end
 end
-
 function trial_ids = get_trial_ids_for_shuffle(trial_struct_array)
 if ~isstruct(trial_struct_array) || ~isfield(trial_struct_array, 'trialId')
     error('Expected a trial struct array with field trialId.');
@@ -1404,7 +1406,6 @@ for i = 1:numel(trial_struct_array)
     trial_ids(i) = trial_struct_array(i).trialId;
 end
 end
-
 function groupd = get_groupd_for_shuffle(run_entry, field_name)
 base_field = strip_suffix_for_shuffle(field_name, '_nanmask');
 specific_groupd_field = sprintf('%s_groupd', base_field);
@@ -1416,7 +1417,6 @@ elseif isfield(run_entry, 'groupd')
 else
     error('Cannot find groupd or %s.', specific_groupd_field);
 end
-
 groupd = double(groupd(:)');
 if any(groupd < 0) || any(~isfinite(groupd)) || any(groupd ~= round(groupd))
     error('Invalid groupd for field %s.', field_name);
@@ -1429,11 +1429,9 @@ if numel(in) >= numel(suffix) && strcmp(in(end-numel(suffix)+1:end), suffix)
     out = in(1:end-numel(suffix));
 end
 end
-
 function run_shuffle = build_run_shuffle_info_for_field(run_entry, trial_ids, n_groups, field_name)
 cond_idx = run_entry.condition_index_per_trial_full(:)';
 n_cond = numel(run_entry.conditions_full);
-
 run_shuffle = struct();
 run_shuffle.field_name = field_name;
 run_shuffle.n_groups = n_groups;
@@ -1443,7 +1441,6 @@ run_shuffle.conditions = repmat(struct( ...
     'n_trials_present', [], ...
     'local_permutation_by_group', [], ...
     'source_trial_ids_by_group', []), 1, n_cond);
-
 for c = 1:n_cond
     trial_ids_this_condition = trial_ids(cond_idx(trial_ids) == c);
     n_trials = numel(trial_ids_this_condition);
@@ -1452,7 +1449,6 @@ for c = 1:n_cond
     for g = 1:n_groups
         source_ids_by_group{g} = trial_ids_this_condition(local_perms{g});
     end
-
     run_shuffle.conditions(c).condition_index = c;
     run_shuffle.conditions(c).trial_ids_present = trial_ids_this_condition(:)';
     run_shuffle.conditions(c).n_trials_present = n_trials;
@@ -1464,7 +1460,6 @@ end
 function perms = make_group_permutations_for_shuffle(n_trials, n_groups)
 base = 1:n_trials;
 perms = cell(1, n_groups);
-
 if n_trials <= 1
     if n_groups > n_trials
         warn_more_groups_than_trials_for_shuffle(n_trials, n_groups);
@@ -1484,7 +1479,6 @@ end
 function perms = joint_cyclic_group_permutations_for_shuffle(n_trials, n_groups)
 base = 1:n_trials;
 perms = cell(1, n_groups);
-
 % Conjugating a cyclic shift by a random trial order produces a random
 % nTrials-cycle. Its nonzero powers are derangements and any two different
 % powers are elementwise different.
@@ -1499,7 +1493,6 @@ else
     n_shuffled_groups = n_groups - 1;
     keep_final_identity = true;
 end
-
 power_order = randperm(n_trials - 1);
 power_sequence = repmat(power_order, 1, ...
     ceil(n_shuffled_groups / (n_trials - 1)));
@@ -1517,7 +1510,6 @@ if keep_final_identity
     perms{n_groups} = base;
 end
 end
-
 function warn_more_groups_than_trials_for_shuffle(n_trials, n_groups)
 % Avoid flooding the command window when many conditions have the same
 % nTrials/nGroups combination.
@@ -1530,7 +1522,6 @@ warning_key = sprintf('%d_%d', n_trials, n_groups);
 if any(strcmp(warned_combinations, warning_key))
     return;
 end
-
 if n_trials <= 1
     warning('model_data_prepar_with_trialshuffle:MoreGroupsThanTrials', ...
         ['n_groups (%d) > n_trials (%d). Joint elementwise-distinct ', ...
@@ -1545,7 +1536,6 @@ else
 end
 warned_combinations{end + 1} = warning_key;
 end
-
 function trial_struct_array = apply_shuffle_to_trial_struct_for_field(trial_struct_array, groupd, run_shuffle, field_name, run_index)
 if isempty(trial_struct_array)
     return;
@@ -1556,7 +1546,6 @@ if numel(groupd) ~= run_shuffle.n_groups
            'numel(groupd) = %d, expected %d.'], ...
         field_name, run_index, numel(groupd), run_shuffle.n_groups);
 end
-
 n_rows_expected = sum(groupd);
 n_rows_actual = size(trial_struct_array(1).y, 1);
 if n_rows_actual ~= n_rows_expected
@@ -1568,7 +1557,6 @@ end
 row_ranges = make_group_row_ranges_for_shuffle(groupd);
 trial_id_to_position = make_trial_id_to_position_map_for_shuffle(trial_struct_array);
 original_trial_struct_array = trial_struct_array;
-
 for c = 1:numel(run_shuffle.conditions)
     target_trial_ids = run_shuffle.conditions(c).trial_ids_present;
     n_trials = numel(target_trial_ids);
@@ -1581,7 +1569,6 @@ for c = 1:numel(run_shuffle.conditions)
         target_id = target_trial_ids(i);
         target_pos = trial_id_to_position(target_id);
         y_new = original_trial_struct_array(target_pos).y;
-
         for g = 1:numel(groupd)
             rows = row_ranges{g};
             if isempty(rows)
@@ -1592,7 +1579,6 @@ for c = 1:numel(run_shuffle.conditions)
             source_id = source_ids(i);
             source_pos = trial_id_to_position(source_id);
             y_source = original_trial_struct_array(source_pos).y;
-
             if size(y_source, 2) ~= size(y_new, 2)
                 error(['Time-bin mismatch in model_data_allruns{%d}.%s between ', ...
                        'target trialId %d and source trialId %d.'], ...
@@ -1600,6 +1586,316 @@ for c = 1:numel(run_shuffle.conditions)
             end
 
             y_new(rows, :) = y_source(rows, :);
+        end
+
+        trial_struct_array(target_pos).y = y_new;
+    end
+end
+end
+
+%% ======================= Unit-independent trial-shuffle local functions =======================
+function [model_data_allruns_shuffled, info] = ...
+        make_unit_independently_trialshuffled_model_data_allruns( ...
+        model_data_allruns, source_file, output_file, random_seed)
+if ~iscell(model_data_allruns)
+    error('model_data_allruns must be a cell array.');
+end
+
+if nargin < 2
+    source_file = '';
+end
+if nargin < 3 || isempty(output_file)
+    output_file = fullfile(pwd, ...
+        'model_data_allruns_trialshuffled_unit_independently_withincondition.mat');
+end
+if nargin < 4
+    random_seed = [];
+end
+
+% Do not reseed here. The group-specific shuffle initialized the RNG and
+% consumed its own random draws already. Continuing from that state keeps
+% the first shuffled output unchanged and makes the complete two-stage
+% procedure reproducible whenever trial_shuffle_random_seed is fixed.
+rng_state_before_unit_shuffle = rng;
+if isempty(random_seed)
+    random_seed_mode = 'shuffle';
+else
+    random_seed_mode = 'fixed';
+end
+
+data_fields = get_data_field_list();
+model_data_allruns_shuffled = model_data_allruns;
+info = struct();
+info.source_file = source_file;
+info.output_file = output_file;
+info.random_seed = random_seed;
+info.random_seed_mode = random_seed_mode;
+info.rng_continued_from_group_shuffle = true;
+info.rng_state_before_unit_shuffle = rng_state_before_unit_shuffle;
+info.created_by = mfilename;
+info.created_on = datestr(now);
+info.rule = [ ...
+    'Starting from the within-condition group-shuffled dataset, every unit ', ...
+    'receives its own ordinary randperm trial permutation within each run ', ...
+    'and condition. Complete within-trial time courses move together. ', ...
+    'No derangement or cross-unit elementwise-distinct constraint is used.'];
+info.runs = cell(size(model_data_allruns));
+
+fprintf('\n============================================================\n');
+fprintf(['Creating additional within-condition unit-independent ', ...
+    'trial-shuffled control\n']);
+fprintf('============================================================\n');
+
+for s = 1:numel(model_data_allruns_shuffled)
+    this_run = model_data_allruns_shuffled{s};
+    if isfield(this_run, 'stim_tag')
+        fprintf(' Unit-shuffling run %d/%d: %s\n', ...
+            s, numel(model_data_allruns_shuffled), this_run.stim_tag);
+    else
+        fprintf(' Unit-shuffling run %d/%d\n', ...
+            s, numel(model_data_allruns_shuffled));
+    end
+
+    validate_run_has_required_condition_fields_for_shuffle(this_run, s);
+
+    main_fields = data_fields(cellfun(@(f) isfield(this_run, f), data_fields));
+    if isempty(main_fields)
+        error('No main data fields were found in model_data_allruns{%d}.', s);
+    end
+    mask_fields = get_existing_mask_fields_for_shuffle(this_run, data_fields);
+    fields_to_group_after_shuffle = [main_fields, mask_fields];
+
+    run_info = struct();
+    if isfield(this_run, 'stim_tag')
+        run_info.stim_tag = this_run.stim_tag;
+    else
+        run_info.stim_tag = '';
+    end
+    if isfield(this_run, 'nan_trial_strategy')
+        run_info.nan_trial_strategy = this_run.nan_trial_strategy;
+    else
+        run_info.nan_trial_strategy = [];
+    end
+
+    [use_shared_shuffle, compatibility_check] = ...
+        check_main_fields_compatible_for_unit_shuffle(this_run, main_fields);
+    run_info.compatibility_check = compatibility_check;
+
+    if use_shared_shuffle
+        run_info.shuffle_mode = 'shared_across_data_versions';
+        ref_field = main_fields{1};
+        ref_trial_ids = get_trial_ids_for_shuffle(this_run.(ref_field));
+        n_units = get_n_units_for_unit_shuffle(this_run, ref_field, s);
+        shared_info = build_run_unit_independent_shuffle_info_for_field( ...
+            this_run, ref_trial_ids, n_units, ref_field);
+        run_info.shared_shuffle = shared_info;
+
+        for k = 1:numel(main_fields)
+            f = main_fields{k};
+            this_run.(f) = apply_unit_independent_shuffle_to_trial_struct( ...
+                this_run.(f), shared_info, f, s);
+        end
+        for k = 1:numel(mask_fields)
+            f = mask_fields{k};
+            this_run.(f) = apply_unit_independent_shuffle_to_trial_struct( ...
+                this_run.(f), shared_info, f, s);
+        end
+    else
+        run_info.shuffle_mode = 'per_data_version';
+        run_info.field_shuffle = struct();
+        for k = 1:numel(main_fields)
+            f = main_fields{k};
+            trial_ids = get_trial_ids_for_shuffle(this_run.(f));
+            n_units = get_n_units_for_unit_shuffle(this_run, f, s);
+            field_info = build_run_unit_independent_shuffle_info_for_field( ...
+                this_run, trial_ids, n_units, f);
+            run_info.field_shuffle.(f) = field_info;
+
+            this_run.(f) = apply_unit_independent_shuffle_to_trial_struct( ...
+                this_run.(f), field_info, f, s);
+            mask_field = sprintf('%s_nanmask', f);
+            if isfield(this_run, mask_field)
+                this_run.(mask_field) = ...
+                    apply_unit_independent_shuffle_to_trial_struct( ...
+                    this_run.(mask_field), field_info, mask_field, s);
+            end
+        end
+    end
+
+    this_run = rebuild_by_condition_fields_after_shuffle( ...
+        this_run, fields_to_group_after_shuffle);
+    model_data_allruns_shuffled{s} = this_run;
+    info.runs{s} = run_info;
+end
+
+info.rng_state_after_unit_shuffle = rng;
+end
+
+function [all_compatible, check_info] = ...
+        check_main_fields_compatible_for_unit_shuffle(run_entry, main_fields)
+ref_field = main_fields{1};
+ref_ids = get_trial_ids_for_shuffle(run_entry.(ref_field));
+ref_n_units = get_n_units_for_unit_shuffle(run_entry, ref_field, NaN);
+ref_unit_identity = get_unit_identity_for_unit_shuffle( ...
+    run_entry, ref_field, ref_n_units);
+
+check_info = struct();
+check_info.checked = true;
+check_info.reference_field = ref_field;
+check_info.all_trial_id_lists_identical = true;
+check_info.all_unit_layouts_identical = true;
+check_info.different_trial_id_fields = {};
+check_info.different_unit_layout_fields = {};
+
+for k = 2:numel(main_fields)
+    f = main_fields{k};
+    ids = get_trial_ids_for_shuffle(run_entry.(f));
+    if ~isequal(ids, ref_ids)
+        check_info.all_trial_id_lists_identical = false;
+        check_info.different_trial_id_fields{end+1} = f; %#ok<AGROW>
+    end
+
+    n_units = get_n_units_for_unit_shuffle(run_entry, f, NaN);
+    unit_identity = get_unit_identity_for_unit_shuffle( ...
+        run_entry, f, n_units);
+    if n_units ~= ref_n_units || ~isequal(unit_identity, ref_unit_identity)
+        check_info.all_unit_layouts_identical = false;
+        check_info.different_unit_layout_fields{end+1} = f; %#ok<AGROW>
+    end
+end
+
+all_compatible = check_info.all_trial_id_lists_identical && ...
+    check_info.all_unit_layouts_identical;
+end
+
+function n_units = get_n_units_for_unit_shuffle(run_entry, field_name, run_index)
+groupd = get_groupd_for_shuffle(run_entry, field_name);
+n_units = sum(groupd);
+
+trial_struct_array = run_entry.(field_name);
+if ~isempty(trial_struct_array)
+    n_rows_actual = size(trial_struct_array(1).y, 1);
+    if n_rows_actual ~= n_units
+        if isfinite(run_index)
+            error(['Row count mismatch in model_data_allruns{%d}.%s: ', ...
+                'size(y,1) = %d, sum(groupd) = %d.'], ...
+                run_index, field_name, n_rows_actual, n_units);
+        else
+            error(['Row count mismatch in field %s: size(y,1) = %d, ', ...
+                'sum(groupd) = %d.'], field_name, n_rows_actual, n_units);
+        end
+    end
+end
+end
+
+function unit_identity = get_unit_identity_for_unit_shuffle( ...
+        run_entry, field_name, n_units)
+base_field = strip_suffix_for_shuffle(field_name, '_nanmask');
+specific_keep_field = sprintf('%s_kept_neuron_global', base_field);
+
+if isfield(run_entry, specific_keep_field)
+    unit_identity = run_entry.(specific_keep_field);
+    unit_identity = double(unit_identity(:));
+elseif isfield(run_entry, 'kept_neuron_global')
+    unit_identity = double(run_entry.kept_neuron_global(:));
+else
+    unit_identity = (1:n_units)';
+end
+
+if numel(unit_identity) ~= n_units
+    error(['Neuron-identity length mismatch for field %s: expected %d, ', ...
+        'found %d.'], field_name, n_units, numel(unit_identity));
+end
+end
+
+function run_shuffle = ...
+        build_run_unit_independent_shuffle_info_for_field( ...
+        run_entry, trial_ids, n_units, field_name)
+cond_idx = run_entry.condition_index_per_trial_full(:)';
+n_cond = numel(run_entry.conditions_full);
+run_shuffle = struct();
+run_shuffle.field_name = field_name;
+run_shuffle.n_units = n_units;
+run_shuffle.conditions = repmat(struct( ...
+    'condition_index', [], ...
+    'trial_ids_present', [], ...
+    'n_trials_present', [], ...
+    'local_permutation_by_unit', [], ...
+    'source_trial_ids_by_unit', []), 1, n_cond);
+
+for c = 1:n_cond
+    trial_ids_this_condition = trial_ids(cond_idx(trial_ids) == c);
+    n_trials = numel(trial_ids_this_condition);
+    local_perms = make_unit_independent_permutations_for_shuffle( ...
+        n_trials, n_units);
+    source_ids_by_unit = zeros(n_units, n_trials);
+    for u = 1:n_units
+        source_ids_by_unit(u, :) = ...
+            trial_ids_this_condition(local_perms(u, :));
+    end
+
+    run_shuffle.conditions(c).condition_index = c;
+    run_shuffle.conditions(c).trial_ids_present = ...
+        trial_ids_this_condition(:)';
+    run_shuffle.conditions(c).n_trials_present = n_trials;
+    run_shuffle.conditions(c).local_permutation_by_unit = local_perms;
+    run_shuffle.conditions(c).source_trial_ids_by_unit = source_ids_by_unit;
+end
+end
+
+function perms = make_unit_independent_permutations_for_shuffle( ...
+        n_trials, n_units)
+perms = zeros(n_units, n_trials);
+for u = 1:n_units
+    perms(u, :) = randperm(n_trials);
+end
+end
+
+function trial_struct_array = ...
+        apply_unit_independent_shuffle_to_trial_struct( ...
+        trial_struct_array, run_shuffle, field_name, run_index)
+if isempty(trial_struct_array)
+    return;
+end
+
+n_units_actual = size(trial_struct_array(1).y, 1);
+if n_units_actual ~= run_shuffle.n_units
+    error(['Unit count mismatch while unit-independently shuffling field ', ...
+        '%s in model_data_allruns{%d}: size(y,1) = %d, expected %d.'], ...
+        field_name, run_index, n_units_actual, run_shuffle.n_units);
+end
+
+trial_id_to_position = ...
+    make_trial_id_to_position_map_for_shuffle(trial_struct_array);
+original_trial_struct_array = trial_struct_array;
+
+for c = 1:numel(run_shuffle.conditions)
+    target_trial_ids = run_shuffle.conditions(c).trial_ids_present;
+    n_trials = numel(target_trial_ids);
+    source_ids_by_unit = ...
+        run_shuffle.conditions(c).source_trial_ids_by_unit;
+
+    if ~isequal(size(source_ids_by_unit), [run_shuffle.n_units, n_trials])
+        error(['Invalid unit-specific source-trial mapping for condition %d, ', ...
+            'field %s, model_data_allruns{%d}.'], c, field_name, run_index);
+    end
+
+    for i = 1:n_trials
+        target_id = target_trial_ids(i);
+        target_pos = trial_id_to_position(target_id);
+        y_new = original_trial_struct_array(target_pos).y;
+
+        for u = 1:run_shuffle.n_units
+            source_id = source_ids_by_unit(u, i);
+            source_pos = trial_id_to_position(source_id);
+            y_source = original_trial_struct_array(source_pos).y;
+            if size(y_source, 1) ~= run_shuffle.n_units || ...
+                    size(y_source, 2) ~= size(y_new, 2)
+                error(['Data-size mismatch in model_data_allruns{%d}.%s ', ...
+                    'between target trialId %d and source trialId %d.'], ...
+                    run_index, field_name, target_id, source_id);
+            end
+            y_new(u, :) = y_source(u, :);
         end
 
         trial_struct_array(target_pos).y = y_new;
@@ -1624,7 +1920,6 @@ end
 
 function M = make_trial_id_to_position_map_for_shuffle(trial_struct_array)
 M = containers.Map('KeyType', 'double', 'ValueType', 'double');
-
 for i = 1:numel(trial_struct_array)
     tid = trial_struct_array(i).trialId;
     if isKey(M, tid)
@@ -1633,7 +1928,6 @@ for i = 1:numel(trial_struct_array)
     M(tid) = i;
 end
 end
-
 function run_entry = rebuild_by_condition_fields_after_shuffle(run_entry, fields_to_group)
 for k = 1:numel(fields_to_group)
     f = fields_to_group{k};
