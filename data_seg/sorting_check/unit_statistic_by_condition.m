@@ -6,7 +6,8 @@
 %   using stiminfo (ignoring condition_ids), then compute condition-level
 %   metrics for each unit:
 %       - firing rate during stimulus
-%       - d-prime (stim vs prestim)
+%       - d-prime (matched stim vs prestim windows)
+%       - d-prime_whole_time (full-stimulus FR vs prestim FR)
 %       - Fano factor
 %
 %   Finally, for plotting, take across-condition summary values for each
@@ -14,6 +15,9 @@
 %       - maximum FR
 %       - minimum FR
 %       - maximum d-prime
+%       - minimum d-prime
+%       - maximum d-prime_whole_time
+%       - minimum d-prime_whole_time
 %       - maximum Fano factor
 %
 % Inputs required:
@@ -29,8 +33,8 @@
 %
 % Outputs saved in each kilosort folder:
 %   - unit_condition_metrics.mat
-%   - condition_metrics_summary_max.png
-%   - condition_metrics_summary_max.fig
+%   - condition_metrics_summary_maxmin.png
+%   - condition_metrics_summary_maxmin.fig
 %
 % =========================================================================
 
@@ -161,8 +165,30 @@ for ip = 1:numel(probes)
         done_file_2 = fullfile(ksDir, 'condition_metrics_summary_maxmin.png');
         done_file_3 = fullfile(ksDir, 'condition_metrics_summary_maxmin.fig');
 
+        % Skip only when the existing outputs already contain the new
+        % dprime_whole_time metric. Older output files from previous versions
+        % should be recomputed and overwritten.
+        outputs_are_current = false;
         if isfile(done_file_1) && isfile(done_file_2) && isfile(done_file_3)
-            fprintf('\nSkipping ksDir (already analyzed): %s\n', ksDir);
+            try
+                Sdone = load(done_file_1, 'unit_condition_metrics');
+                if isfield(Sdone, 'unit_condition_metrics') && ...
+                        iscell(Sdone.unit_condition_metrics) && ...
+                        ~isempty(Sdone.unit_condition_metrics)
+
+                    outputs_are_current = all(cellfun(@(x) ...
+                        isstruct(x) && ...
+                        isfield(x, 'max_dprime_whole_time') && ...
+                        isfield(x, 'min_dprime_whole_time'), ...
+                        Sdone.unit_condition_metrics));
+                end
+            catch
+                outputs_are_current = false;
+            end
+        end
+
+        if outputs_are_current
+            fprintf('\nSkipping ksDir (already analyzed with dprime_whole_time): %s\n', ksDir);
             continue;
         end
 
@@ -309,7 +335,8 @@ function run_metrics = compute_run_condition_metrics(this_run_trials, stiminfo_r
 %   For one run, group trials into stimulus conditions and compute
 %   condition-level metrics for each unit, including:
 %       - firing rate during the full stimulus window
-%       - d-prime between stimulus and prestimulus activity
+%       - d-prime using matched prestim/stim windows of length prestim_t
+%       - d-prime_whole_time using full-stimulus FR vs prestimulus FR
 %       - Fano factor using a common shortest stimulus window
 %
 % Inputs:
@@ -361,6 +388,7 @@ nUnit = numel(Allunits);
 % Preallocate unit-by-condition summary matrices.
 fr_by_cond = nan(nUnit, nCond);
 dp_by_cond = nan(nUnit, nCond);
+dp_whole_time_by_cond = nan(nUnit, nCond);
 ff_by_cond = nan(nUnit, nCond);
 
 % Initialize output structure.
@@ -389,10 +417,13 @@ for c = 1:nCond
         run_metrics.conditions(c).stim_end_median = NaN;
         run_metrics.conditions(c).fr_stim = nan(nUnit, 1);
         run_metrics.conditions(c).dprime = nan(nUnit, 1);
+        run_metrics.conditions(c).dprime_whole_time = nan(nUnit, 1);
         run_metrics.conditions(c).fano_factor = nan(nUnit, 1);
         run_metrics.conditions(c).fr_stim_trial = nan(nUnit, 0);
         run_metrics.conditions(c).dprime_stim_rate_trial = nan(nUnit, 0);
         run_metrics.conditions(c).prestim_rate_trial = nan(nUnit, 0);
+        run_metrics.conditions(c).dprime_whole_time_stim_rate_trial = nan(nUnit, 0);
+        run_metrics.conditions(c).dprime_whole_time_prestim_rate_trial = nan(nUnit, 0);
         run_metrics.conditions(c).ff_spikecount_trial = nan(nUnit, 0);
         continue;
     end
@@ -404,23 +435,28 @@ for c = 1:nCond
 
     % Preallocate per-unit outputs for this condition.
     fr_stim = nan(nUnit, 1);
-    dprime  = nan(nUnit, 1);
-    ff      = nan(nUnit, 1);
+    dprime = nan(nUnit, 1);
+    dprime_whole_time = nan(nUnit, 1);
+    ff = nan(nUnit, 1);
 
     % Store trial-level intermediate results for later inspection.
-    fr_stim_trial_mat          = nan(nUnit, numel(trial_idx));
+    fr_stim_trial_mat = nan(nUnit, numel(trial_idx));
     dprime_stim_rate_trial_mat = nan(nUnit, numel(trial_idx));
-    pre_rate_trial_mat         = nan(nUnit, numel(trial_idx));
-    ff_count_trial_mat         = nan(nUnit, numel(trial_idx));
+    pre_rate_trial_mat = nan(nUnit, numel(trial_idx));
+    dprime_whole_time_stim_rate_trial_mat = nan(nUnit, numel(trial_idx));
+    dprime_whole_time_prestim_rate_trial_mat = nan(nUnit, numel(trial_idx));
+    ff_count_trial_mat = nan(nUnit, numel(trial_idx));
 
     for u = 1:nUnit
         uid = Allunits(u);
 
         % Temporary per-trial vectors for one unit.
-        fr_rates_trial          = nan(numel(trial_idx), 1);
+        fr_rates_trial = nan(numel(trial_idx), 1);
         dprime_stim_rates_trial = nan(numel(trial_idx), 1);
-        pre_rates_trial         = nan(numel(trial_idx), 1);
-        stim_counts_ff          = nan(numel(trial_idx), 1);
+        pre_rates_trial = nan(numel(trial_idx), 1);
+        dprime_whole_time_stim_rates_trial = nan(numel(trial_idx), 1);
+        dprime_whole_time_prestim_rates_trial = nan(numel(trial_idx), 1);
+        stim_counts_ff = nan(numel(trial_idx), 1);
 
         for tt = 1:numel(trial_idx)
             tr = this_run_trials{trial_idx(tt)};
@@ -433,7 +469,8 @@ for c = 1:nCond
             stim_count_actual = sum(spk_t >= 0 & spk_t < stim_end);
             fr_rates_trial(tt) = stim_count_actual / stim_end;
 
-            % (2) d-prime uses matched prestim/stim windows of length prestim_t.
+            % (2) Original d-prime uses matched prestim/stim windows of
+            % length prestim_t. Keep this logic unchanged.
             if stim_end >= prestim_t
                 stim_count_dp = sum(spk_t >= 0 & spk_t < prestim_t);
                 dprime_stim_rates_trial(tt) = stim_count_dp / prestim_t;
@@ -442,21 +479,38 @@ for c = 1:nCond
                 pre_rates_trial(tt) = pre_count / prestim_t;
             end
 
-            % (3) Fano factor uses the shortest stimulus window within the
+            % (3) d-prime_whole_time compares firing rates rather than
+            % matched spike-count windows. The stimulus rate uses the entire
+            % stimulus duration of this trial, while the prestimulus rate
+            % uses the full prestim_t window. Store these separately from
+            % the ordinary FR/d-prime trial vectors for symmetric access.
+            dprime_whole_time_stim_rates_trial(tt) = stim_count_actual / stim_end;
+            pre_count_whole_time = sum(spk_t >= -prestim_t & spk_t < 0);
+            dprime_whole_time_prestim_rates_trial(tt) = pre_count_whole_time / prestim_t;
+
+            % (4) Fano factor uses the shortest stimulus window within the
             % current condition so that spike counts are comparable.
             stim_counts_ff(tt) = sum(spk_t >= 0 & spk_t < stim_end_min);
         end
 
         % Save trial-level matrices.
-        fr_stim_trial_mat(u, :)          = fr_rates_trial(:)';
+        fr_stim_trial_mat(u, :) = fr_rates_trial(:)';
         dprime_stim_rate_trial_mat(u, :) = dprime_stim_rates_trial(:)';
-        pre_rate_trial_mat(u, :)         = pre_rates_trial(:)';
-        ff_count_trial_mat(u, :)         = stim_counts_ff(:)';
+        pre_rate_trial_mat(u, :) = pre_rates_trial(:)';
+        dprime_whole_time_stim_rate_trial_mat(u, :) = ...
+            dprime_whole_time_stim_rates_trial(:)';
+        dprime_whole_time_prestim_rate_trial_mat(u, :) = ...
+            dprime_whole_time_prestim_rates_trial(:)';
+        ff_count_trial_mat(u, :) = stim_counts_ff(:)';
 
         % Compute final unit-level condition metrics.
         % Compute final unit-level condition metrics WITHOUT ignoring NaN.
         fr_stim(u) = mean(fr_rates_trial);
-        dprime(u)  = calc_dprime_from_rates(dprime_stim_rates_trial, pre_rates_trial);
+        dprime(u) = calc_dprime_from_rates( ...
+            dprime_stim_rates_trial, pre_rates_trial);
+        dprime_whole_time(u) = calc_dprime_from_rates( ...
+            dprime_whole_time_stim_rates_trial, ...
+            dprime_whole_time_prestim_rates_trial);
 
         mu_ff = mean(stim_counts_ff);
         if isfinite(mu_ff) && mu_ff > 0
@@ -471,20 +525,27 @@ for c = 1:nCond
     run_metrics.conditions(c).stim_end_median = stim_end_med;
     run_metrics.conditions(c).fr_stim = fr_stim;
     run_metrics.conditions(c).dprime = dprime;
+    run_metrics.conditions(c).dprime_whole_time = dprime_whole_time;
     run_metrics.conditions(c).fano_factor = ff;
     run_metrics.conditions(c).fr_stim_trial = fr_stim_trial_mat;
     run_metrics.conditions(c).dprime_stim_rate_trial = dprime_stim_rate_trial_mat;
     run_metrics.conditions(c).prestim_rate_trial = pre_rate_trial_mat;
+    run_metrics.conditions(c).dprime_whole_time_stim_rate_trial = ...
+        dprime_whole_time_stim_rate_trial_mat;
+    run_metrics.conditions(c).dprime_whole_time_prestim_rate_trial = ...
+        dprime_whole_time_prestim_rate_trial_mat;
     run_metrics.conditions(c).ff_spikecount_trial = ff_count_trial_mat;
 
     % Fill unit-by-condition summary tables.
     fr_by_cond(:, c) = fr_stim;
     dp_by_cond(:, c) = dprime;
+    dp_whole_time_by_cond(:, c) = dprime_whole_time;
     ff_by_cond(:, c) = ff;
 end
 
 run_metrics.metric_by_condition.fr_stim = fr_by_cond;
 run_metrics.metric_by_condition.dprime = dp_by_cond;
+run_metrics.metric_by_condition.dprime_whole_time = dp_whole_time_by_cond;
 run_metrics.metric_by_condition.fano_factor = ff_by_cond;
 
 % For plotting, keep across-condition summary values for each unit.
@@ -492,6 +553,8 @@ run_metrics.max_fr_stim = max(fr_by_cond, [], 2);
 run_metrics.min_fr_stim = min(fr_by_cond, [], 2);
 run_metrics.max_dprime = max(dp_by_cond, [], 2);
 run_metrics.min_dprime = min(dp_by_cond, [], 2);
+run_metrics.max_dprime_whole_time = max(dp_whole_time_by_cond, [], 2);
+run_metrics.min_dprime_whole_time = min(dp_whole_time_by_cond, [], 2);
 run_metrics.max_fano_factor = max(ff_by_cond, [], 2);
 
 end
@@ -859,6 +922,8 @@ function plot_condition_summary_maxmin(unit_condition_metrics, ksDir)
 %       - minimum FR across conditions
 %       - maximum d-prime across conditions
 %       - minimum d-prime across conditions
+%       - maximum d-prime_whole_time across conditions
+%       - minimum d-prime_whole_time across conditions
 %       - maximum Fano factor across conditions
 %
 % Inputs:
@@ -883,7 +948,7 @@ dp_edges = -0.5:0.25:4;
 ff_edges = 0:0.25:5;
 
 figW = max(1200, 330 * nRun);
-figH = 1350;
+figH = 1850;
 
 hfig = figure('Color', 'w', 'Position', [50 50 figW figH]);
 
@@ -895,19 +960,25 @@ for j = 1:nRun
     min_fr_plot = run_metrics.min_fr_stim;
     max_dp_plot = run_metrics.max_dprime;
     min_dp_plot = run_metrics.min_dprime;
-    ff_plot     = run_metrics.max_fano_factor;
+    max_dp_whole_time_plot = run_metrics.max_dprime_whole_time;
+    min_dp_whole_time_plot = run_metrics.min_dprime_whole_time;
+    ff_plot = run_metrics.max_fano_factor;
 
     % Remove NaN values only for plotting.
     max_fr_plot = max_fr_plot(isfinite(max_fr_plot));
     min_fr_plot = min_fr_plot(isfinite(min_fr_plot));
     max_dp_plot = max_dp_plot(isfinite(max_dp_plot));
     min_dp_plot = min_dp_plot(isfinite(min_dp_plot));
-    ff_plot     = ff_plot(isfinite(ff_plot));
+    max_dp_whole_time_plot = ...
+        max_dp_whole_time_plot(isfinite(max_dp_whole_time_plot));
+    min_dp_whole_time_plot = ...
+        min_dp_whole_time_plot(isfinite(min_dp_whole_time_plot));
+    ff_plot = ff_plot(isfinite(ff_plot));
 
     % ------------------------------------------------------------
     % Row 1: maximum firing rate across conditions
     % ------------------------------------------------------------
-    subplot(5, nRun, j);
+    subplot(7, nRun, j);
     histogram(max_fr_plot, fr_edges, 'Normalization', 'probability', ...
         'FaceColor', [0.30 0.50 0.90], 'EdgeColor', [0.30 0.50 0.90]);
     title(run_metrics.stim_tag, 'Interpreter', 'none');
@@ -921,7 +992,7 @@ for j = 1:nRun
     % ------------------------------------------------------------
     % Row 2: minimum firing rate across conditions
     % ------------------------------------------------------------
-    subplot(5, nRun, nRun + j);
+    subplot(7, nRun, nRun + j);
     histogram(min_fr_plot, fr_edges, 'Normalization', 'probability', ...
         'FaceColor', [0.55 0.55 0.55], 'EdgeColor', [0.55 0.55 0.55]);
     xlabel('min FR across conditions (sp/s)');
@@ -934,7 +1005,7 @@ for j = 1:nRun
     % ------------------------------------------------------------
     % Row 3: maximum d-prime across conditions
     % ------------------------------------------------------------
-    subplot(5, nRun, 2*nRun + j);
+    subplot(7, nRun, 2*nRun + j);
     histogram(max_dp_plot, dp_edges, 'Normalization', 'probability', ...
         'FaceColor', [0.25 0.60 0.90], 'EdgeColor', [0.25 0.60 0.90]);
     xlabel('max d-prime across conditions');
@@ -947,7 +1018,7 @@ for j = 1:nRun
     % ------------------------------------------------------------
     % Row 4: minimum d-prime across conditions
     % ------------------------------------------------------------
-    subplot(5, nRun, 3*nRun + j);
+    subplot(7, nRun, 3*nRun + j);
     histogram(min_dp_plot, dp_edges, 'Normalization', 'probability', ...
         'FaceColor', [0.65 0.65 0.65], 'EdgeColor', [0.65 0.65 0.65]);
     xlabel('min d-prime across conditions');
@@ -958,9 +1029,37 @@ for j = 1:nRun
     xlim([dp_edges(1) dp_edges(end)]);
 
     % ------------------------------------------------------------
-    % Row 5: maximum Fano factor across conditions
+    % Row 5: maximum d-prime_whole_time across conditions
     % ------------------------------------------------------------
-    subplot(5, nRun, 4*nRun + j);
+    subplot(7, nRun, 4*nRun + j);
+    histogram(max_dp_whole_time_plot, dp_edges, ...
+        'Normalization', 'probability', ...
+        'FaceColor', [0.55 0.35 0.85], 'EdgeColor', [0.55 0.35 0.85]);
+    xlabel('max d-prime_whole_time across conditions');
+    if j == 1
+        ylabel('Proportion of units');
+    end
+    add_mu_median_text(max_dp_whole_time_plot);
+    xlim([dp_edges(1) dp_edges(end)]);
+
+    % ------------------------------------------------------------
+    % Row 6: minimum d-prime_whole_time across conditions
+    % ------------------------------------------------------------
+    subplot(7, nRun, 5*nRun + j);
+    histogram(min_dp_whole_time_plot, dp_edges, ...
+        'Normalization', 'probability', ...
+        'FaceColor', [0.72 0.65 0.80], 'EdgeColor', [0.72 0.65 0.80]);
+    xlabel('min d-prime_whole_time across conditions');
+    if j == 1
+        ylabel('Proportion of units');
+    end
+    add_mu_median_text(min_dp_whole_time_plot);
+    xlim([dp_edges(1) dp_edges(end)]);
+
+    % ------------------------------------------------------------
+    % Row 7: maximum Fano factor across conditions
+    % ------------------------------------------------------------
+    subplot(7, nRun, 6*nRun + j);
     histogram(ff_plot, ff_edges, 'Normalization', 'probability', ...
         'FaceColor', [0.20 0.70 0.50], 'EdgeColor', [0.20 0.70 0.50]);
     xlabel('max Fano factor across conditions');
