@@ -4,7 +4,7 @@
 clc;clear
 % Synthetic data generated from a DLAG model
 % dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1/model_data_allruns';
-dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\model_data_allruns';
+dat_file = '/gs/gsfs0/home/hema/train_dlag/model_data_allruns.mat';
 fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
