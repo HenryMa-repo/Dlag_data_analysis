@@ -19,25 +19,34 @@
 %    - The RF tile uses the original independently scaled parula display.
 %    - A colored border and legend identify each object's model area.
 %
-% 2. One individual-object 3-D RF/stimulus plot per probe and population.
+% 2. One individual-object 3-D RF/stimulus plot per area and population.
 %    - Contains only objects with finite RF fits and
 %      fit.rsquare >= RF_R2_threshold.
 %    - Each object's RF center and 95% RF ellipse are drawn at its depth.
 %    - Each area uses its user-specified color.
 %    - Target stimuli are drawn in neutral gray on a bottom plane.
-%    - In the readable version, unusually large x/y RF diameters are omitted
-%      by the user-adjustable median + SD rule below. Axes then include the
-%      complete retained ellipses and complete target stimuli.
-%    - The full version retains all finite cross-threshold ellipses.
+%    - Different model areas on the same probe are plotted separately.
+%    - In the readable version, unusually small or large x/y RF diameters
+%      are omitted using an area-specific median +/- SD rule.
+%    - Stimulus diameter never participates in RF outlier selection.
+%    - Axes include both complete retained RF ellipses and complete target
+%      stimuli. The full version retains all finite cross-threshold ellipses.
 %
 % 3. One combined area-mean RF/stimulus plot in the CatGT folder.
 %    - Every probe-area model group is averaged independently.
 %    - There is no averaging across different areas/groups.
 %    - All independently computed area means and target stimuli are drawn
 %      together in one figure for direct comparison.
-%    - Both readable and full versions are saved.
-%    - The original RF_analysis readable/full method is retained unchanged
-%      for this two-dimensional mean overlay.
+%    - Three versions are saved:
+%        readable                : original readable-axis view; all valid
+%                                  cross-threshold objects enter each mean.
+%        readable_remove_outlier : readable-axis view after removing small
+%                                  and large RF-size outliers independently within
+%                                  each area and population, then recomputing
+%                                  that area's mean center and mean size.
+%        full                    : original full-axis view; all valid
+%                                  cross-threshold objects enter each mean.
+%    - The original readable/full mean data are retained unchanged.
 %
 % These three figure classes are produced for:
 %   unit       : model-used units
@@ -74,13 +83,13 @@
 % ---------------
 % Every probe's kilosort folder (unit figures):
 %   all_model_<areas>_unit_RF_map_depth_desc_<target>.png/.fig
-%   model_<areas>_cross_threshold_unit_RF_3D_readable_<target>.png/.fig
-%   model_<areas>_cross_threshold_unit_RF_3D_full_<target>.png/.fig
+%   model_<area>_cross_threshold_unit_RF_3D_readable_<target>.png/.fig
+%   model_<area>_cross_threshold_unit_RF_3D_full_<target>.png/.fig
 %
 % Every probe folder containing site_rf_results.mat (site figures):
 %   all_model_<areas>_all_sites_RF_map_depth_desc_<target>.png/.fig
 %   all_model_<areas>_unit_sites_RF_map_depth_desc_<target>.png/.fig
-%   model_<areas>_cross_threshold_<all_sites|unit_sites>_RF_3D_...
+%   model_<area>_cross_threshold_<all_sites|unit_sites>_RF_3D_...
 %       <readable|full>_<target>.png/.fig
 %
 % Common CatGT folder (one independent mean per model group; no cross-area
@@ -88,6 +97,7 @@
 %   model_<allareas>_cross_threshold_<unit|all_sites|unit_sites>_...
 %       area_mean_RF_stimulus_overlay_...
 %       readable_<target>.png/.fig
+%       readable_remove_outlier_<target>.png/.fig
 %       full_<target>.png/.fig
 %   model_<allareas>_cross_threshold_RF_stimulus_summary_<target>.mat
 % =========================================================================
@@ -102,25 +112,32 @@ clear;
 % model_data_prepar_with_trialshuffle.m. The model uses 0-based probe labels:
 % probe_ksDirs{1} -> probe 0, probe_ksDirs{2} -> probe 1, etc.
 probe_ksDirs = { ...
-    'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec0\kilosort4_10_dedup_phy', ...
-    'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\RafiL001p0120_g1_imec1\kilosort4_2_dedup_phy' ...
+    'I:\np_data\RafiL001p0125_g1\catgt_RafiL001p0125_g1\RafiL001p0125_g1_imec0\kilosort4_dedup', ...
+    'I:\np_data\RafiL001p0125_g1\catgt_RafiL001p0125_g1\RafiL001p0125_g1_imec1\kilosort4_dedup' ...
 };
-
 % The model run whose selected units and stimulus layout will be plotted.
-target_stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
+target_stim_tag = '[Gpl2_2c_2sz_400_2_200isi]';
 
 % This one threshold is shared by the unit, all-sites, and unit-sites 3-D
 % plots and area-mean overlays. Every 2-D RF mosaic includes all selected
 % objects and is never filtered by R^2.
 RF_R2_threshold = 0.5;
 
-% Used only by the individual-object 3-D readable figures. For the x and y
-% RF diameters separately, the readable upper size limit is:
-%   max(median(size) + multiplier * std(size), largest stimulus diameter)
-% An ellipse exceeding either x or y limit is omitted from the readable 3-D
-% figure. The full 3-D figure still contains every valid cross-threshold fit.
-% The combined area-mean 2-D overlay does not use this filter.
-readable_size_std_multiplier = 1;
+% Used by both:
+%   1. the individual-object 3-D readable figures, and
+%   2. the 2-D area-mean readable_remove_outlier figures.
+%
+% For x and y RF diameters separately, each area + population computes:
+%   lower limit = median(size) - multiplier * std(size)
+%   upper limit = median(size) + multiplier * std(size)
+% An object is omitted when either x or y RF diameter falls outside its
+% corresponding [lower, upper] interval. Stimulus size does not participate
+% in this outlier rule.
+%
+% Both the 3-D readable plot and the 2-D readable_remove_outlier mean use the
+% same area-specific selection. The original 2-D readable and full means
+% remain unchanged and do not remove size outliers.
+readable_size_std_multiplier = 2;
 
 % Colors are positional and must follow model group order exactly:
 % all areas of probe_ksDirs{1}, followed by all areas of probe_ksDirs{2}, etc.
@@ -287,9 +304,15 @@ model_unit_rf_stimulus_summary.threshold_rule = 'fit.rsquare >= RF_R2_threshold'
 model_unit_rf_stimulus_summary.readable_size_std_multiplier = ...
     readable_size_std_multiplier;
 model_unit_rf_stimulus_summary.readable_3d_rule = [ ...
-    'For x and y RF diameters separately: limit = max(median(size) + ' ...
-    'multiplier*std(size), largest stimulus diameter); omit an ellipse ' ...
-    'when either diameter exceeds its limit.'];
+    'For each area and population independently, and for x and y RF ' ...
+    'diameters separately: lower = median(size) - multiplier*std(size), ' ...
+    'upper = median(size) + multiplier*std(size). Omit an object when ' ...
+    'either diameter falls outside its area-specific interval. Stimulus ' ...
+    'size is not used for outlier selection.'];
+model_unit_rf_stimulus_summary.readable_2d_remove_outlier_rule = [ ...
+    'Use the same area-specific median +/- multiplier*std RF-size rule as ' ...
+    'the 3-D readable plot, then recompute that area mean center and mean ' ...
+    'size from retained objects. Stimulus size is not used for selection.'];
 model_unit_rf_stimulus_summary.population_definitions = struct( ...
     'unit', 'model-used units', ...
     'all_sites', 'all sites in model-used areas', ...
@@ -409,13 +432,16 @@ end
 
 unit_group_summary = compute_population_group_summaries( ...
     unit_probe_summaries, group_name, group_probe, groupd, ...
-    group_display_label, area_color_rgb, RF_R2_threshold, 'unit');
+    group_display_label, area_color_rgb, RF_R2_threshold, 'unit', ...
+    readable_size_std_multiplier);
 all_sites_group_summary = compute_population_group_summaries( ...
     all_sites_probe_summaries, group_name, group_probe, [], ...
-    group_display_label, area_color_rgb, RF_R2_threshold, 'all_sites');
+    group_display_label, area_color_rgb, RF_R2_threshold, 'all_sites', ...
+    readable_size_std_multiplier);
 unit_sites_group_summary = compute_population_group_summaries( ...
     unit_sites_probe_summaries, group_name, group_probe, [], ...
-    group_display_label, area_color_rgb, RF_R2_threshold, 'unit_sites');
+    group_display_label, area_color_rgb, RF_R2_threshold, 'unit_sites', ...
+    readable_size_std_multiplier);
 
 % Keep .probe and .group as the unit-analysis fields for compatibility with
 % the previous version, and add explicit fields for both site populations.
@@ -454,6 +480,10 @@ model_unit_rf_stimulus_summary.output.area_mean_overlay_readable_png = ...
     unit_mean_output.area_mean_overlay_readable_png;
 model_unit_rf_stimulus_summary.output.area_mean_overlay_readable_fig = ...
     unit_mean_output.area_mean_overlay_readable_fig;
+model_unit_rf_stimulus_summary.output.area_mean_overlay_readable_remove_outlier_png = ...
+    unit_mean_output.area_mean_overlay_readable_remove_outlier_png;
+model_unit_rf_stimulus_summary.output.area_mean_overlay_readable_remove_outlier_fig = ...
+    unit_mean_output.area_mean_overlay_readable_remove_outlier_fig;
 model_unit_rf_stimulus_summary.output.area_mean_overlay_full_png = ...
     unit_mean_output.area_mean_overlay_full_png;
 model_unit_rf_stimulus_summary.output.area_mean_overlay_full_fig = ...
@@ -472,8 +502,11 @@ save(summary_mat_file, 'model_unit_rf_stimulus_summary');
 
 fprintf('\nSaved combined independent-area mean overlays and summary:\n');
 fprintf('  %s\n', unit_mean_output.area_mean_overlay_readable_png);
+fprintf('  %s\n', unit_mean_output.area_mean_overlay_readable_remove_outlier_png);
 fprintf('  %s\n', all_sites_mean_output.area_mean_overlay_readable_png);
+fprintf('  %s\n', all_sites_mean_output.area_mean_overlay_readable_remove_outlier_png);
 fprintf('  %s\n', unit_sites_mean_output.area_mean_overlay_readable_png);
+fprintf('  %s\n', unit_sites_mean_output.area_mean_overlay_readable_remove_outlier_png);
 fprintf('  %s\n', summary_mat_file);
 fprintf('\nDone.\n');
 
@@ -1174,6 +1207,8 @@ function result = create_population_outputs( ...
 model_group_indices = result.model_group_indices;
 probe_id = result.probe_id;
 
+% Keep the all-object 2-D RF mosaic at probe level exactly as before: all
+% model areas on this probe remain together in one mosaic.
 map_stem = sprintf( ...
     'all_model_%s_%s_RF_map_depth_desc_%s', ...
     probe_area_safe_name, file_token, target_safe_name);
@@ -1191,48 +1226,96 @@ fig = plot_model_rf_map_2d( ...
 save_figure_outputs(fig, map_png_file, map_fig_file, png_dpi, ...
     figure_visibility, close_figures_after_save);
 
-view_modes = {'readable', 'full'};
-rf3d_png_files = cell(1,2);
-rf3d_fig_files = cell(1,2);
-view_info = cell(1,2);
+% The individual-object 3-D figures are area-specific. If one probe contains
+% multiple model areas, each area now gets its own readable and full figure.
+nArea = numel(model_group_indices);
+area_3d_output = repmat(struct( ...
+    'group_index', [], ...
+    'group_name', '', ...
+    'group_display_label', '', ...
+    'readable_png', '', ...
+    'readable_fig', '', ...
+    'full_png', '', ...
+    'full_fig', ''), nArea, 1);
+readable_info = cell(nArea,1);
+full_info = cell(nArea,1);
 
-for v = 1:2
-    view_mode = view_modes{v};
-    rf3d_stem = sprintf( ...
-        'model_%s_cross_threshold_%s_RF_3D_%s_%s', ...
-        probe_area_safe_name, file_token, view_mode, target_safe_name);
-    rf3d_png_files{v} = fullfile(output_folder, [rf3d_stem '.png']);
-    rf3d_fig_files{v} = make_optional_fig_path( ...
-        output_folder, rf3d_stem, save_fig_files);
-    % Use the output basename for both the in-figure title and the FIG
-    % window name. PNG and FIG share this same basename.
-    rf3d_title = rf3d_stem;
+for ii = 1:nArea
+    g = model_group_indices(ii);
+    area_name = get_population_group_name(result, g);
+    area_safe_name = make_filename_safe(area_name, 30);
 
-    [fig, view_info{v}] = plot_population_rf_3d( ...
-        result, target_stimulus_xy_size, stimulus_plane_depth_um, ...
-        model_group_indices, group_display_label, area_color_rgb, ...
-        RF_R2_threshold, readable_size_std_multiplier, view_mode, ...
-        rf3d_title, figure_visibility);
-    save_figure_outputs(fig, rf3d_png_files{v}, rf3d_fig_files{v}, ...
-        png_dpi, figure_visibility, close_figures_after_save);
+    area_3d_output(ii).group_index = g;
+    area_3d_output(ii).group_name = area_name;
+    area_3d_output(ii).group_display_label = group_display_label{g};
+
+    view_modes = {'readable', 'full'};
+    for v = 1:2
+        view_mode = view_modes{v};
+        rf3d_stem = sprintf( ...
+            'model_%s_cross_threshold_%s_RF_3D_%s_%s', ...
+            area_safe_name, file_token, view_mode, target_safe_name);
+        rf3d_png_file = fullfile(output_folder, [rf3d_stem '.png']);
+        rf3d_fig_file = make_optional_fig_path( ...
+            output_folder, rf3d_stem, save_fig_files);
+        rf3d_title = rf3d_stem;
+
+        [fig, this_view_info] = plot_population_rf_3d( ...
+            result, target_stimulus_xy_size, stimulus_plane_depth_um, ...
+            g, group_display_label, area_color_rgb, ...
+            RF_R2_threshold, readable_size_std_multiplier, view_mode, ...
+            rf3d_title, figure_visibility);
+        save_figure_outputs(fig, rf3d_png_file, rf3d_fig_file, ...
+            png_dpi, figure_visibility, close_figures_after_save);
+
+        if strcmpi(view_mode, 'readable')
+            area_3d_output(ii).readable_png = rf3d_png_file;
+            area_3d_output(ii).readable_fig = rf3d_fig_file;
+            readable_info{ii} = this_view_info;
+        else
+            area_3d_output(ii).full_png = rf3d_png_file;
+            area_3d_output(ii).full_fig = rf3d_fig_file;
+            full_info{ii} = this_view_info;
+        end
+    end
 end
 
-result.readable_3d = view_info{1};
-result.full_3d = view_info{2};
+result.readable_3d = vertcat(readable_info{:});
+result.full_3d = vertcat(full_info{:});
 result.output = struct();
 result.output.all_rf_map_png = map_png_file;
 result.output.all_rf_map_fig = map_fig_file;
-result.output.cross_threshold_rf_3d_readable_png = rf3d_png_files{1};
-result.output.cross_threshold_rf_3d_readable_fig = rf3d_fig_files{1};
-result.output.cross_threshold_rf_3d_full_png = rf3d_png_files{2};
-result.output.cross_threshold_rf_3d_full_fig = rf3d_fig_files{2};
+result.output.cross_threshold_rf_3d_by_group = area_3d_output;
+result.output.cross_threshold_rf_3d_readable_png = ...
+    {area_3d_output.readable_png}';
+result.output.cross_threshold_rf_3d_readable_fig = ...
+    {area_3d_output.readable_fig}';
+result.output.cross_threshold_rf_3d_full_png = ...
+    {area_3d_output.full_png}';
+result.output.cross_threshold_rf_3d_full_fig = ...
+    {area_3d_output.full_fig}';
 
 fprintf('Saved probe %d %s figures:\n', probe_id, display_name);
 fprintf('  %s\n', map_png_file);
-fprintf('  %s\n', rf3d_png_files{1});
-fprintf('  %s\n', rf3d_png_files{2});
+for ii = 1:nArea
+    fprintf('  %s\n', area_3d_output(ii).readable_png);
+    fprintf('  %s\n', area_3d_output(ii).full_png);
+end
 end
 
+
+function area_name = get_population_group_name(result, group_index)
+take = result.object_group_index == group_index;
+if ~any(take)
+    error('Population contains no object for model group %d.', group_index);
+end
+names = unique(result.object_groupname(take));
+if numel(names) ~= 1
+    error('Model group %d maps to multiple area names in one population.', ...
+        group_index);
+end
+area_name = names{1};
+end
 
 function result = remove_population_rf_map(result)
 if isfield(result, 'rf_map')
@@ -1377,25 +1460,33 @@ end
 
 function [fig, view_info] = plot_population_rf_3d( ...
         probe_result, target_stimulus_xy_size, stimulus_plane_depth_um, ...
-        model_group_indices, group_display_label, area_color_rgb, ...
+        model_group_index, group_display_label, area_color_rgb, ...
         RF_R2_threshold, readable_size_std_multiplier, view_mode, ...
         figure_title, figure_visibility)
 
 validate_view_mode(view_mode);
-candidate_mask = probe_result.cross_threshold_mask(:);
+candidate_mask = probe_result.cross_threshold_mask(:) & ...
+    probe_result.object_group_index(:) == model_group_index;
 
 if strcmpi(view_mode, 'readable')
     [plot_mask, view_info] = get_readable_3d_plot_mask( ...
-        probe_result, target_stimulus_xy_size, ...
-        readable_size_std_multiplier);
+        probe_result, candidate_mask, readable_size_std_multiplier);
 else
     plot_mask = candidate_mask;
     view_info = make_full_3d_view_info(probe_result, candidate_mask);
 end
 
+area_name = get_population_group_name(probe_result, model_group_index);
+view_info.group_index = model_group_index;
+view_info.group_name = area_name;
+view_info.group_display_label = group_display_label{model_group_index};
+
 centers = probe_result.rf_center(plot_mask,:);
 sizes = probe_result.rf_size(plot_mask,:);
 
+% Preserve the original axis behavior: x/y limits must include both the
+% complete target stimuli and the complete RF ellipses that are actually
+% plotted in this view.
 [xl, yl] = get_overlay_axis_limits( ...
     target_stimulus_xy_size, centers, sizes, view_mode, true);
 
@@ -1444,12 +1535,10 @@ line(ax, [0 0], yl, [meridian_z meridian_z], ...
 plot_local_index = probe_result.depth_desc_order(:);
 plot_local_index = plot_local_index(plot_mask(plot_local_index));
 if ~isempty(plot_local_index)
-
     theta = linspace(0, 2*pi, 161);
     for ii = 1:numel(plot_local_index)
         u = plot_local_index(ii);
-        g = probe_result.object_group_index(u);
-        color_value = area_color_rgb(g,:);
+        color_value = area_color_rgb(model_group_index,:);
         center = probe_result.rf_center(u,:);
         rf_size = probe_result.rf_size(u,:);
         depth = probe_result.object_depth_um(u);
@@ -1472,33 +1561,29 @@ zlim(ax, zl);
 xlabel(ax, 'RF x (deg)');
 ylabel(ax, 'RF y (deg)');
 zlabel(ax, 'Depth from probe tip (um)');
-% Keep both the in-figure title and FIG window name identical to the output
-% basename. Counts and population units are reported by the legend.
 title(ax, figure_title, 'Interpreter', 'none', 'FontWeight', 'bold');
 grid(ax, 'on');
 box(ax, 'on');
 view(ax, 42, 25);
 set_rf_depth_aspect(ax);
 
-legend_handles = gobjects(numel(model_group_indices) + 1, 1);
-legend_labels = cell(numel(model_group_indices) + 1, 1);
 unit_label = get_population_unit_label(probe_result.population_type);
-for ii = 1:numel(model_group_indices)
-    g = model_group_indices(ii);
-    n_good_group = sum(plot_mask & probe_result.object_group_index == g);
-    legend_handles(ii) = plot3(ax, NaN, NaN, NaN, 'o-', ...
-        'Color', area_color_rgb(g,:), ...
-        'MarkerFaceColor', area_color_rgb(g,:), ...
-        'MarkerEdgeColor', area_color_rgb(g,:), ...
-        'LineWidth', 1.5, 'MarkerSize', 5);
-    legend_labels{ii} = sprintf('%s = %d %s', ...
-        group_display_label{g}, n_good_group, unit_label);
-end
-legend_handles(end) = plot3(ax, NaN, NaN, NaN, 'o', ...
+legend_handles = gobjects(2,1);
+legend_labels = cell(2,1);
+color_value = area_color_rgb(model_group_index,:);
+n_good_group = sum(plot_mask);
+legend_handles(1) = plot3(ax, NaN, NaN, NaN, 'o-', ...
+    'Color', color_value, ...
+    'MarkerFaceColor', color_value, ...
+    'MarkerEdgeColor', color_value, ...
+    'LineWidth', 1.5, 'MarkerSize', 5);
+legend_labels{1} = sprintf('%s = %d %s', ...
+    group_display_label{model_group_index}, n_good_group, unit_label);
+legend_handles(2) = plot3(ax, NaN, NaN, NaN, 'o', ...
     'MarkerFaceColor', [0.45 0.45 0.45], ...
     'MarkerEdgeColor', 'none', 'MarkerSize', 8, ...
     'LineStyle', 'none');
-legend_labels{end} = 'Target stimuli';
+legend_labels{2} = 'Target stimuli';
 legend(ax, legend_handles, legend_labels, ...
     'Location', 'best', 'Interpreter', 'none', 'Box', 'off');
 hold(ax, 'off');
@@ -1506,56 +1591,73 @@ end
 
 
 function [plot_mask, info] = get_readable_3d_plot_mask( ...
-        result, target_stimulus_xy_size, multiplier)
+        result, candidate_mask, multiplier)
 
-candidate_mask = result.cross_threshold_mask(:);
-candidate_size = result.rf_size(candidate_mask,:);
-
-if isempty(target_stimulus_xy_size)
-    largest_stimulus_diameter = 0;
-else
-    largest_stimulus_diameter = ...
-        max(target_stimulus_xy_size(:,3), [], 'omitnan');
+candidate_mask = logical(candidate_mask(:));
+if numel(candidate_mask) ~= numel(result.object_ids)
+    error('candidate_mask length does not match the population.');
 end
+candidate_size = result.rf_size(candidate_mask,:);
 
 if isempty(candidate_size)
     size_median_xy = [NaN NaN];
     size_std_xy = [NaN NaN];
-    statistical_limit_xy = [NaN NaN];
-    final_limit_xy = [largest_stimulus_diameter, ...
-        largest_stimulus_diameter];
+    lower_limit_xy = [NaN NaN];
+    upper_limit_xy = [NaN NaN];
     plot_mask = false(size(candidate_mask));
+    small_outlier_mask = false(size(candidate_mask));
+    large_outlier_mask = false(size(candidate_mask));
 else
     size_median_xy = median(candidate_size, 1, 'omitnan');
     size_std_xy = std(candidate_size, 0, 1, 'omitnan');
-    statistical_limit_xy = ...
+    lower_limit_xy = ...
+        size_median_xy - multiplier .* size_std_xy;
+    upper_limit_xy = ...
         size_median_xy + multiplier .* size_std_xy;
-    final_limit_xy = max(statistical_limit_xy, ...
-        largest_stimulus_diameter * ones(1,2));
 
-    keep_candidate = candidate_size(:,1) <= final_limit_xy(1) & ...
-        candidate_size(:,2) <= final_limit_xy(2);
-    plot_mask = false(size(candidate_mask));
+    keep_candidate = ...
+        candidate_size(:,1) >= lower_limit_xy(1) & ...
+        candidate_size(:,1) <= upper_limit_xy(1) & ...
+        candidate_size(:,2) >= lower_limit_xy(2) & ...
+        candidate_size(:,2) <= upper_limit_xy(2);
+
+    small_candidate = ...
+        candidate_size(:,1) < lower_limit_xy(1) | ...
+        candidate_size(:,2) < lower_limit_xy(2);
+    large_candidate = ...
+        candidate_size(:,1) > upper_limit_xy(1) | ...
+        candidate_size(:,2) > upper_limit_xy(2);
+
     candidate_index = find(candidate_mask);
+    plot_mask = false(size(candidate_mask));
     plot_mask(candidate_index(keep_candidate)) = true;
+    small_outlier_mask = false(size(candidate_mask));
+    small_outlier_mask(candidate_index(small_candidate)) = true;
+    large_outlier_mask = false(size(candidate_mask));
+    large_outlier_mask(candidate_index(large_candidate)) = true;
 end
 
 outlier_mask = candidate_mask & ~plot_mask;
 info = struct();
 info.view_mode = 'readable';
 info.readable_size_std_multiplier = multiplier;
-info.largest_stimulus_diameter = largest_stimulus_diameter;
 info.size_median_xy = size_median_xy;
 info.size_std_xy = size_std_xy;
-info.statistical_size_limit_xy = statistical_limit_xy;
-info.final_size_limit_xy = final_limit_xy;
+info.size_lower_limit_xy = lower_limit_xy;
+info.size_upper_limit_xy = upper_limit_xy;
 info.n_cross_threshold_candidates = sum(candidate_mask);
 info.n_plotted = sum(plot_mask);
 info.n_size_outliers_omitted = sum(outlier_mask);
+info.n_small_size_outliers_omitted = sum(small_outlier_mask);
+info.n_large_size_outliers_omitted = sum(large_outlier_mask);
 info.cross_threshold_candidate_object_ids = ...
     result.object_ids(candidate_mask);
 info.plotted_object_ids = result.object_ids(plot_mask);
 info.size_outlier_object_ids = result.object_ids(outlier_mask);
+info.small_size_outlier_object_ids = ...
+    result.object_ids(small_outlier_mask);
+info.large_size_outlier_object_ids = ...
+    result.object_ids(large_outlier_mask);
 end
 
 
@@ -1563,20 +1665,24 @@ function info = make_full_3d_view_info(result, candidate_mask)
 info = struct();
 info.view_mode = 'full';
 info.readable_size_std_multiplier = NaN;
-info.largest_stimulus_diameter = NaN;
 info.size_median_xy = [NaN NaN];
 info.size_std_xy = [NaN NaN];
-info.statistical_size_limit_xy = [NaN NaN];
-info.final_size_limit_xy = [NaN NaN];
+info.size_lower_limit_xy = [NaN NaN];
+info.size_upper_limit_xy = [NaN NaN];
 info.n_cross_threshold_candidates = sum(candidate_mask);
 info.n_plotted = sum(candidate_mask);
 info.n_size_outliers_omitted = 0;
+info.n_small_size_outliers_omitted = 0;
+info.n_large_size_outliers_omitted = 0;
 info.cross_threshold_candidate_object_ids = ...
     result.object_ids(candidate_mask);
 info.plotted_object_ids = result.object_ids(candidate_mask);
 info.size_outlier_object_ids = result.object_ids(false(size(candidate_mask)));
+info.small_size_outlier_object_ids = ...
+    result.object_ids(false(size(candidate_mask)));
+info.large_size_outlier_object_ids = ...
+    result.object_ids(false(size(candidate_mask)));
 end
-
 
 function draw_stimulus_floor_3d(ax, xl, yl, z_plane)
 X = [xl(1) xl(2); xl(1) xl(2)];
@@ -1623,7 +1729,7 @@ end
 function group_summary = compute_population_group_summaries( ...
         probe_summaries, group_name, group_probe, expected_groupd, ...
         group_display_label, area_color_rgb, RF_R2_threshold, ...
-        population_type)
+        population_type, readable_size_std_multiplier)
 
 nGroup = numel(group_name);
 template = struct( ...
@@ -1652,7 +1758,31 @@ template = struct( ...
     'cross_threshold_site_ids', [], ...
     'cross_threshold_site_depth_um', [], ...
     'mean_center', [NaN NaN], ...
-    'mean_size', [NaN NaN]);
+    'mean_size', [NaN NaN], ...
+    'readable_remove_outlier_size_std_multiplier', ...
+        readable_size_std_multiplier, ...
+    'readable_remove_outlier_size_median_xy', [NaN NaN], ...
+    'readable_remove_outlier_size_std_xy', [NaN NaN], ...
+    'readable_remove_outlier_size_lower_limit_xy', [NaN NaN], ...
+    'readable_remove_outlier_size_upper_limit_xy', [NaN NaN], ...
+    'n_readable_remove_outlier_objects', 0, ...
+    'readable_remove_outlier_object_ids', [], ...
+    'readable_remove_outlier_object_depth_um', [], ...
+    'readable_remove_outlier_center', [], ...
+    'readable_remove_outlier_size', [], ...
+    'readable_remove_outlier_rsquare', [], ...
+    'n_readable_remove_outliers_omitted', 0, ...
+    'n_readable_remove_small_outliers_omitted', 0, ...
+    'n_readable_remove_large_outliers_omitted', 0, ...
+    'readable_remove_outlier_outlier_object_ids', [], ...
+    'readable_remove_outlier_small_object_ids', [], ...
+    'readable_remove_outlier_large_object_ids', [], ...
+    'mean_center_remove_outlier', [NaN NaN], ...
+    'mean_size_remove_outlier', [NaN NaN], ...
+    'n_readable_remove_outlier_units', 0, ...
+    'readable_remove_outlier_unit_ids', [], ...
+    'n_readable_remove_outlier_sites', 0, ...
+    'readable_remove_outlier_site_ids', []);
 group_summary = repmat(template, nGroup, 1);
 
 for g = 1:nGroup
@@ -1676,6 +1806,9 @@ for g = 1:nGroup
     take_good = take_object & probe_result.cross_threshold_mask;
     good_center = probe_result.rf_center(take_good,:);
     good_size = probe_result.rf_size(take_good,:);
+    good_rsquare = probe_result.rf_rsquare(take_good);
+    good_object_ids = probe_result.object_ids(take_good);
+    good_depth_um = probe_result.object_depth_um(take_good);
 
     group_summary(g).group_index = g;
     group_summary(g).group_name = group_name{g};
@@ -1685,39 +1818,116 @@ for g = 1:nGroup
     group_summary(g).n_objects = n_object;
     group_summary(g).object_ids = probe_result.object_ids(take_object);
     group_summary(g).n_cross_threshold_objects = sum(take_good);
-    group_summary(g).cross_threshold_object_ids = ...
-        probe_result.object_ids(take_good);
-    group_summary(g).cross_threshold_object_depth_um = ...
-        probe_result.object_depth_um(take_good);
+    group_summary(g).cross_threshold_object_ids = good_object_ids;
+    group_summary(g).cross_threshold_object_depth_um = good_depth_um;
     group_summary(g).cross_threshold_center = good_center;
     group_summary(g).cross_threshold_size = good_size;
-    group_summary(g).cross_threshold_rsquare = ...
-        probe_result.rf_rsquare(take_good);
+    group_summary(g).cross_threshold_rsquare = good_rsquare;
 
     if strcmp(population_type, 'unit')
         group_summary(g).n_model_units = n_object;
         group_summary(g).model_unit_ids = ...
             probe_result.object_ids(take_object);
         group_summary(g).n_cross_threshold_units = sum(take_good);
-        group_summary(g).cross_threshold_unit_ids = ...
-            probe_result.object_ids(take_good);
-        group_summary(g).cross_threshold_unit_depth_um = ...
-            probe_result.object_depth_um(take_good);
+        group_summary(g).cross_threshold_unit_ids = good_object_ids;
+        group_summary(g).cross_threshold_unit_depth_um = good_depth_um;
     else
         group_summary(g).n_sites = n_object;
         group_summary(g).site_ids = probe_result.object_ids(take_object);
         group_summary(g).n_cross_threshold_sites = sum(take_good);
-        group_summary(g).cross_threshold_site_ids = ...
-            probe_result.object_ids(take_good);
-        group_summary(g).cross_threshold_site_depth_um = ...
-            probe_result.object_depth_um(take_good);
+        group_summary(g).cross_threshold_site_ids = good_object_ids;
+        group_summary(g).cross_threshold_site_depth_um = good_depth_um;
     end
 
     if any(take_good)
-        % This is an independent within-group arithmetic mean. No value from
-        % another area/group enters this mean.
+        % Original area mean: all valid cross-threshold objects in this area.
+        % This remains unchanged for the existing readable and full figures.
         group_summary(g).mean_center = mean(good_center, 1, 'omitnan');
         group_summary(g).mean_size = mean(good_size, 1, 'omitnan');
+
+        % New readable_remove_outlier mean. The cutoff is computed only from
+        % this area + population and is purely RF-based; stimulus size does
+        % not participate in selection.
+        size_median_xy = median(good_size, 1, 'omitnan');
+        size_std_xy = std(good_size, 0, 1, 'omitnan');
+        lower_limit_xy = ...
+            size_median_xy - readable_size_std_multiplier .* size_std_xy;
+        upper_limit_xy = ...
+            size_median_xy + readable_size_std_multiplier .* size_std_xy;
+
+        keep_good = ...
+            good_size(:,1) >= lower_limit_xy(1) & ...
+            good_size(:,1) <= upper_limit_xy(1) & ...
+            good_size(:,2) >= lower_limit_xy(2) & ...
+            good_size(:,2) <= upper_limit_xy(2);
+        small_good = ...
+            good_size(:,1) < lower_limit_xy(1) | ...
+            good_size(:,2) < lower_limit_xy(2);
+        large_good = ...
+            good_size(:,1) > upper_limit_xy(1) | ...
+            good_size(:,2) > upper_limit_xy(2);
+
+        kept_center = good_center(keep_good,:);
+        kept_size = good_size(keep_good,:);
+        kept_rsquare = good_rsquare(keep_good);
+        kept_object_ids = good_object_ids(keep_good);
+        kept_depth_um = good_depth_um(keep_good);
+        outlier_object_ids = good_object_ids(~keep_good);
+
+        group_summary(g).readable_remove_outlier_size_median_xy = ...
+            size_median_xy;
+        group_summary(g).readable_remove_outlier_size_std_xy = ...
+            size_std_xy;
+        group_summary(g).readable_remove_outlier_size_lower_limit_xy = ...
+            lower_limit_xy;
+        group_summary(g).readable_remove_outlier_size_upper_limit_xy = ...
+            upper_limit_xy;
+        group_summary(g).n_readable_remove_outlier_objects = ...
+            sum(keep_good);
+        group_summary(g).readable_remove_outlier_object_ids = ...
+            kept_object_ids;
+        group_summary(g).readable_remove_outlier_object_depth_um = ...
+            kept_depth_um;
+        group_summary(g).readable_remove_outlier_center = kept_center;
+        group_summary(g).readable_remove_outlier_size = kept_size;
+        group_summary(g).readable_remove_outlier_rsquare = kept_rsquare;
+        group_summary(g).n_readable_remove_outliers_omitted = ...
+            sum(~keep_good);
+        group_summary(g).n_readable_remove_small_outliers_omitted = ...
+            sum(small_good);
+        group_summary(g).n_readable_remove_large_outliers_omitted = ...
+            sum(large_good);
+        group_summary(g).readable_remove_outlier_outlier_object_ids = ...
+            outlier_object_ids;
+        group_summary(g).readable_remove_outlier_small_object_ids = ...
+            good_object_ids(small_good);
+        group_summary(g).readable_remove_outlier_large_object_ids = ...
+            good_object_ids(large_good);
+
+        if strcmp(population_type, 'unit')
+            group_summary(g).n_readable_remove_outlier_units = ...
+                sum(keep_good);
+            group_summary(g).readable_remove_outlier_unit_ids = ...
+                kept_object_ids;
+        else
+            group_summary(g).n_readable_remove_outlier_sites = ...
+                sum(keep_good);
+            group_summary(g).readable_remove_outlier_site_ids = ...
+                kept_object_ids;
+        end
+
+        if any(keep_good)
+            group_summary(g).mean_center_remove_outlier = ...
+                mean(kept_center, 1, 'omitnan');
+            group_summary(g).mean_size_remove_outlier = ...
+                mean(kept_size, 1, 'omitnan');
+        else
+            warning([ ...
+                'All cross-threshold %s objects were removed by the ' ...
+                'area-specific median +/- SD RF-size cutoff for probe %d / ' ...
+                'area %s. The readable_remove_outlier mean ellipse will be ' ...
+                'omitted.'], population_type, group_probe(g), group_name{g});
+        end
     else
         warning([ ...
             'No %s object in probe %d / area %s has a finite positive-size ' ...
@@ -1727,18 +1937,17 @@ for g = 1:nGroup
 end
 end
 
-
 function output = create_population_mean_outputs( ...
         group_summary, catgt_folder, file_token, display_name, ...
         all_group_safe_name, target_safe_name, target_stim_tag, ...
         target_stimulus_xy_size, RF_R2_threshold, figure_visibility, ...
         close_figures_after_save, save_fig_files, png_dpi)
 
-view_modes = {'readable', 'full'};
-png_files = cell(1,2);
-fig_files = cell(1,2);
+view_modes = {'readable', 'readable_remove_outlier', 'full'};
+png_files = cell(1,3);
+fig_files = cell(1,3);
 
-for v = 1:2
+for v = 1:3
     view_mode = view_modes{v};
     mean_stem = sprintf( ...
         ['model_%s_cross_threshold_%s_area_mean_RF_stimulus_' ...
@@ -1751,9 +1960,9 @@ for v = 1:2
     % window name. PNG and FIG share this same basename.
     mean_title = mean_stem;
 
-    % This function intentionally retains the original two-dimensional
-    % combined-mean readable/full axis method. The individual-object 3-D
-    % readable size filter is not applied here.
+    % readable and full retain the original cross-threshold means.
+    % readable_remove_outlier uses the area-specific size cutoff stored in
+    % group_summary and the mean recomputed after those outliers are removed.
     fig = plot_independent_area_mean_overlay( ...
         group_summary, target_stimulus_xy_size, RF_R2_threshold, ...
         view_mode, mean_title, figure_visibility);
@@ -1765,23 +1974,33 @@ output = struct();
 output.population_type = file_token;
 output.area_mean_overlay_readable_png = png_files{1};
 output.area_mean_overlay_readable_fig = fig_files{1};
-output.area_mean_overlay_full_png = png_files{2};
-output.area_mean_overlay_full_fig = fig_files{2};
+output.area_mean_overlay_readable_remove_outlier_png = png_files{2};
+output.area_mean_overlay_readable_remove_outlier_fig = fig_files{2};
+output.area_mean_overlay_full_png = png_files{3};
+output.area_mean_overlay_full_fig = fig_files{3};
 
 fprintf('Saved combined %s area-mean overlays:\n', display_name);
 fprintf('  %s\n', png_files{1});
 fprintf('  %s\n', png_files{2});
+fprintf('  %s\n', png_files{3});
 end
-
 
 function fig = plot_independent_area_mean_overlay( ...
         group_summary, target_stimulus_xy_size, RF_R2_threshold, ...
         view_mode, figure_title, figure_visibility)
 
-validate_view_mode(view_mode);
+validate_mean_view_mode(view_mode);
 nGroup = numel(group_summary);
-all_centers = reshape([group_summary.mean_center], 2, [])';
-all_sizes = reshape([group_summary.mean_size], 2, [])';
+
+if strcmpi(view_mode, 'readable_remove_outlier')
+    all_centers = reshape([group_summary.mean_center_remove_outlier], 2, [])';
+    all_sizes = reshape([group_summary.mean_size_remove_outlier], 2, [])';
+    axis_view_mode = 'readable';
+else
+    all_centers = reshape([group_summary.mean_center], 2, [])';
+    all_sizes = reshape([group_summary.mean_size], 2, [])';
+    axis_view_mode = view_mode;
+end
 
 fig = figure('Visible', figure_visibility, 'Color', 'w', ...
     'Position', [100 80 900 820], 'Name', figure_title, ...
@@ -1796,8 +2015,16 @@ legend_labels = cell(nGroup + 1, 1);
 unit_label = get_population_unit_label(group_summary(1).population_type);
 for g = 1:nGroup
     color_value = group_summary(g).color_rgb;
-    center = group_summary(g).mean_center;
-    rf_size = group_summary(g).mean_size;
+
+    if strcmpi(view_mode, 'readable_remove_outlier')
+        center = group_summary(g).mean_center_remove_outlier;
+        rf_size = group_summary(g).mean_size_remove_outlier;
+        n_mean_objects = group_summary(g).n_readable_remove_outlier_objects;
+    else
+        center = group_summary(g).mean_center;
+        rf_size = group_summary(g).mean_size;
+        n_mean_objects = group_summary(g).n_cross_threshold_objects;
+    end
 
     if all(isfinite(center)) && all(isfinite(rf_size)) && all(rf_size > 0)
         legend_handles(g) = draw_rf_ellipse_2d( ...
@@ -1813,7 +2040,7 @@ for g = 1:nGroup
 
     legend_labels{g} = sprintf('%s mean = %d %s', ...
         group_summary(g).group_display_label, ...
-        group_summary(g).n_cross_threshold_objects, unit_label);
+        n_mean_objects, unit_label);
 end
 
 legend_handles(end) = plot(ax, NaN, NaN, 'o', ...
@@ -1827,16 +2054,16 @@ box(ax, 'off');
 grid(ax, 'off');
 title(ax, figure_title, 'Interpreter', 'none', 'FontWeight', 'bold');
 
-% Match the old combined-mean RF_analysis behavior: readable and full
-% views both include the complete independently computed mean ellipses.
+% readable_remove_outlier uses the same readable-axis presentation as the
+% original readable figure, but the mean ellipses themselves are recomputed
+% from area-specific outlier-filtered objects.
 set_overlay_axis_limits(ax, target_stimulus_xy_size, ...
-    all_centers, all_sizes, view_mode, true);
+    all_centers, all_sizes, axis_view_mode, true);
 format_rf_overlay_axis(ax);
 legend(ax, legend_handles, legend_labels, ...
     'Location', 'eastoutside', 'Interpreter', 'none', 'Box', 'off');
 hold(ax, 'off');
 end
-
 
 function draw_target_stimulus_circles_2d(ax, target_stimulus_xy_size)
 if isempty(target_stimulus_xy_size)
@@ -1975,6 +2202,16 @@ if min_half_width > 0
 end
 end
 
+
+function validate_mean_view_mode(view_mode)
+if ~(ischar(view_mode) || (isstring(view_mode) && isscalar(view_mode))) || ...
+        ~(strcmpi(view_mode, 'readable') || ...
+          strcmpi(view_mode, 'readable_remove_outlier') || ...
+          strcmpi(view_mode, 'full'))
+    error(['Mean-overlay view_mode must be ''readable'', ' ...
+        '''readable_remove_outlier'', or ''full''.']);
+end
+end
 
 function validate_view_mode(view_mode)
 if ~(ischar(view_mode) || (isstring(view_mode) && isscalar(view_mode))) || ...
