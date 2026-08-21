@@ -9,7 +9,7 @@
 %       total_count = sum(trial.y, 2)
 %    where trial.y is nUnit x nTimeBin.
 % 4. Average total_count across trials within each size.
-% 5. Plot large vs small response separately for each group/probe.
+% 5. Plot large vs small response separately for each model group.
 %
 % Each point = one cell.
 % x-axis = small size mean total spike count per trial.
@@ -24,6 +24,10 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
 data_content = 'raw_count';
 by_condition_field = sprintf('%s_by_condition', data_content);
+
+% Display/file labels only. Their order must follow groupd.
+% These names do not affect unit selection or data grouping.
+group_names = {'V1', 'V2', 'V1'};
 
 % Save options.
 % save_fig is the master switch for saving files.
@@ -94,6 +98,21 @@ end
 cond_data = this_run.(by_condition_field);
 groupd = this_run.groupd(:)';
 
+group_names = reshape(group_names, 1, []);
+
+if numel(group_names) ~= numel(groupd)
+    error(['group_names has %d entries, but groupd contains %d groups. ', ...
+        'The order of group_names must follow groupd.'], ...
+        numel(group_names), numel(groupd));
+end
+
+group_file_tags = cell(1, numel(group_names));
+for g = 1:numel(group_names)
+    group_file_tags{g} = sprintf('Group%d_%s', ...
+        g, make_safe_file_tag_local(group_names{g}));
+end
+mapping_file_tag = strjoin(group_file_tags, '_');
+
 if isempty(cond_data)
     error('%s is empty.', by_condition_field);
 end
@@ -158,13 +177,14 @@ if plot_fullrange
                        'Position', fig_position);
 
     plot_size_rawcount_groups_fullrange( ...
-        small_mean_count, large_mean_count, groupd, ...
+        small_mean_count, large_mean_count, groupd, group_names, ...
         small_size, large_size, stim_tag, ...
         marker_size, marker_face_alpha, marker_edge_alpha);
 
     if save_fig
         save_current_figure_local(hfig_full, fig_out_dir, ...
-            'small_vs_large_rawcount_fullrange', ...
+            sprintf('small_vs_large_rawcount_fullrange_%s', ...
+            mapping_file_tag), ...
             save_png, save_matlab_fig);
     end
 end
@@ -176,7 +196,7 @@ if plot_brokenaxis
                          'Position', fig_position);
 
     plot_size_rawcount_groups_clean_brokenaxis( ...
-        small_mean_count, large_mean_count, groupd, ...
+        small_mean_count, large_mean_count, groupd, group_names, ...
         small_size, large_size, stim_tag, ...
         marker_size, marker_face_alpha, marker_edge_alpha, ...
         break_start_prctile, broken_axis_trigger_ratio, ...
@@ -184,7 +204,8 @@ if plot_brokenaxis
 
     if save_fig
         save_current_figure_local(hfig_broken, fig_out_dir, ...
-            'small_vs_large_rawcount_brokenaxis', ...
+            sprintf('small_vs_large_rawcount_brokenaxis_%s', ...
+            mapping_file_tag), ...
             save_png, save_matlab_fig);
     end
 end
@@ -196,7 +217,7 @@ fprintf('\nDone.\n');
 % =========================================================================
 
 function plot_size_rawcount_groups_fullrange( ...
-    small_mean_count, large_mean_count, groupd, ...
+    small_mean_count, large_mean_count, groupd, group_names, ...
     small_size, large_size, stim_tag, ...
     marker_size, marker_face_alpha, marker_edge_alpha)
 
@@ -241,7 +262,8 @@ function plot_size_rawcount_groups_fullrange( ...
 
         xlabel(sprintf('Small size %g: mean total spike count per trial', small_size));
         ylabel(sprintf('Large size %g: mean total spike count per trial', large_size));
-        title(sprintf('Group %d, n = %d cells', g, groupd(g)), ...
+        title(sprintf('Group %d: %s, n = %d cells', ...
+            g, group_names{g}, groupd(g)), ...
             'Interpreter', 'none');
 
         grid off;
@@ -255,7 +277,7 @@ function plot_size_rawcount_groups_fullrange( ...
 end
 
 function plot_size_rawcount_groups_clean_brokenaxis( ...
-    small_mean_count, large_mean_count, groupd, ...
+    small_mean_count, large_mean_count, groupd, group_names, ...
     small_size, large_size, stim_tag, ...
     marker_size, marker_face_alpha, marker_edge_alpha, ...
     break_start_prctile, broken_axis_trigger_ratio, ...
@@ -316,7 +338,9 @@ function plot_size_rawcount_groups_clean_brokenaxis( ...
 
             xlabel(sprintf('Small size %g: mean total spike count per trial', small_size));
             ylabel(sprintf('Large size %g: mean total spike count per trial', large_size));
-            title(sprintf('Group %d, n = %d cells, linear axis', g, groupd(g)), ...
+            title(sprintf( ...
+                'Group %d: %s, n = %d cells, linear axis', ...
+                g, group_names{g}, groupd(g)), ...
                 'Interpreter', 'none');
 
             grid off;
@@ -377,7 +401,8 @@ function plot_size_rawcount_groups_clean_brokenaxis( ...
 
             xlabel(sprintf('Small size %g: mean total spike count per trial', small_size));
             ylabel(sprintf('Large size %g: mean total spike count per trial', large_size));
-            title(sprintf('Group %d, n = %d cells', g, groupd(g)), ...
+            title(sprintf('Group %d: %s, n = %d cells', ...
+                g, group_names{g}, groupd(g)), ...
                 'Interpreter', 'none');
 
             grid off;
@@ -546,6 +571,27 @@ function save_current_figure_local(hfig, fig_out_dir, base_name, save_png, save_
         fig_file = fullfile(fig_out_dir, sprintf('%s.fig', base_name));
         savefig(hfig, fig_file);
         fprintf('Saved MATLAB figure:\n %s\n', fig_file);
+    end
+end
+
+function tag = make_safe_file_tag_local(value)
+% Convert one user-provided group label to a portable filename component.
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('Every entry in group_names must be text.');
+    end
+
+    tag = strtrim(char(string(value)));
+
+    if isempty(tag)
+        error('group_names cannot contain an empty label.');
+    end
+
+    tag = regexprep(tag, '[^A-Za-z0-9]+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'x';
     end
 end
 

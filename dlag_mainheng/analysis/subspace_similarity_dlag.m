@@ -34,14 +34,20 @@ clc; clear;
 % -------------------------------------------------------------------------
 % User parameters
 % -------------------------------------------------------------------------
-data_content = 'z_across_conditions';
+data_content = 'raw_count';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
 % demean_pooledsd_within_condition
 
-data_condition = [1:16];   % [] for pooled all-condition mode, or e.g. 1:16
+data_condition = [];   % [] for pooled all-condition mode, or e.g. 1:16
 runIdx = 1;
+
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect loading-matrix blocks, latent filters,
+% or any subspace calculation, and they are not compared with stored group
+% or area names in the model, DSL, or SVExpFilter files.
+group_names = {'V1', 'MT'};
 
 % Whether to remove latents marked as DSL-remove by Latents_compare.m.
 % If true, this script loads DSL_and_latent_category_stats.mat from each
@@ -52,7 +58,7 @@ dsl_field = 'logical';     % options usually include 'rawlogical' or 'logical'
 % Whether to remove latents not selected by pick_latents_by_svexp.m.
 % If true, this script loads SVExpFilter_threshold*.mat from each model
 % folder and uses SVExpFilter.(svexp_field){groupIdx} as the keep mask.
-use_svexp_filter = true;
+use_svexp_filter = false;
 svexp_field = 'logical';   % options: 'rawlogical' or 'logical'
 
 % Must match the threshold used in pick_latents_by_svexp.m.
@@ -75,6 +81,10 @@ save_summary_tables = true;
 % Same outer location style as Latents_compare condition-mode outputs.
 % Usually this script is run from the catfolder, so '.' is the catfolder.
 summary_output_dir = '.';
+
+group_names = normalizeGroupNamesLocal(group_names);
+[groupDisplayNames, groupFileTags] = ...
+    buildGroupLabelsLocal(group_names);
 
 % -------------------------------------------------------------------------
 % Main loop setup
@@ -219,6 +229,20 @@ for cond_i = 1:numConditions
     SubspaceSim = computeDlagSubspaceSimilarityLocal( ...
         bestModel, params, gp_params, ambiguousIdxs, DSL, SVExpFilter, opts);
 
+    validateGroupNameCountLocal( ...
+        group_names, ...
+        numel(SubspaceSim.group));
+
+    SubspaceSim.meta = struct();
+    SubspaceSim.meta.group_names = group_names;
+    SubspaceSim.meta.group_display_names = groupDisplayNames;
+    SubspaceSim.meta.group_file_tags = groupFileTags;
+
+    for g = 1:numel(SubspaceSim.group)
+        SubspaceSim.group(g).name = groupDisplayNames{g};
+        SubspaceSim.group(g).file_tag = groupFileTags{g};
+    end
+
     if print_single_model_verbose
         printSubspaceSimilarityResultsLocal(SubspaceSim);
     end
@@ -253,8 +277,11 @@ if use_condition_mode
     if print_summary_tables || save_summary_tables
         for g = 1:numel(SubspaceSim.group)
             tableCell = buildConditionGroupTableCellLocal(SubspaceSim, g, stim_abbrev);
-            titleStr = sprintf('%s condition mode subspace similarity - Group %d (%s)', ...
-                data_content, g, latentSelectionDisplay);
+            titleStr = sprintf( ...
+                '%s condition mode subspace similarity - %s (%s)', ...
+                data_content, ...
+                SubspaceSim.group(g).name, ...
+                latentSelectionDisplay);
 
             if print_summary_tables
                 fprintf('\n============================================================\n');
@@ -264,11 +291,15 @@ if use_condition_mode
 
             if save_summary_tables
                 txtFile = fullfile(summary_output_dir, sprintf( ...
-                    '%s_condition_mode_subspace_similarity_table_%s_group%d.txt', ...
-                    data_content, latentSelectionTag, g));
+                    '%s_condition_mode_subspace_similarity_table_%s_%s.txt', ...
+                    data_content, ...
+                    latentSelectionTag, ...
+                    SubspaceSim.group(g).file_tag));
                 csvFile = fullfile(summary_output_dir, sprintf( ...
-                    '%s_condition_mode_subspace_similarity_table_%s_group%d.csv', ...
-                    data_content, latentSelectionTag, g));
+                    '%s_condition_mode_subspace_similarity_table_%s_%s.csv', ...
+                    data_content, ...
+                    latentSelectionTag, ...
+                    SubspaceSim.group(g).file_tag));
                 saveTableTextAndCsvLocal(tableCell, txtFile, csvFile, titleStr, [3 9 11]);
                 fprintf('Saved summary table: %s\n', txtFile);
                 fprintf('Saved summary table: %s\n', csvFile);
@@ -701,9 +732,13 @@ numGroups = numel(firstSim.group);
 
 Summary = struct();
 Summary.classification = buildSummaryClassificationLocal(AllSubspaceSim, condition_list, stim_abbrev);
+Summary.meta.group_names = firstSim.meta.group_names;
+Summary.meta.group_display_names = firstSim.meta.group_display_names;
+Summary.meta.group_file_tags = firstSim.meta.group_file_tags;
 
 for g = 1:numGroups
-    Summary.group(g).name = sprintf('Group %d', g);
+    Summary.group(g).name = firstSim.group(g).name;
+    Summary.group(g).file_tag = firstSim.group(g).file_tag;
     Summary.group(g).pairNames = firstSim.group(g).pairNames;
     Summary.group(g).pair = cell(1, numel(firstSim.group(g).pair));
 
@@ -814,7 +849,7 @@ function tableCell = buildPooledGroupTableCellLocal(SubspaceSim)
 nGroups = numel(SubspaceSim.group);
 tableCell = makeSummaryHeaderCellLocal('Group');
 for g = 1:nGroups
-    rowLabel = sprintf('Group %d', g);
+    rowLabel = SubspaceSim.group(g).name;
     rowCell = makeOneTableRowFromGroupLocal(SubspaceSim.group(g), 1, rowLabel);
     tableCell(end+1, :) = rowCell; %#ok<AGROW>
 end
@@ -1367,6 +1402,89 @@ elseif code == 1
     out = label1;
 else
     out = label2;
+end
+
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but the current DLAG model ', ...
+        'contains %d groups. The order of group_names must follow ', ...
+        'the model-group order.'], ...
+        numel(group_names), ...
+        numGroups);
+end
+
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf( ...
+        'Group %d: %s', ...
+        g, ...
+        group_names{g});
+
+    areaToken = makeSafeGroupNameTagLocal(group_names{g});
+    groupFileTags{g} = sprintf('G%02d_%s', g, areaToken);
+end
+
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+tag = strtrim(char(string(groupName)));
+tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+tag = regexprep(tag, '_+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+
+if isempty(tag)
+    tag = 'area';
 end
 
 end

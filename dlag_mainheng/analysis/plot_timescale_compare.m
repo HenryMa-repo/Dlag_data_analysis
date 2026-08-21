@@ -7,7 +7,7 @@ close all;
 
 %% ---------------- User parameters --------------------------------------
 
-data_content = 'demean_count_within_trial';
+data_content = 'raw_count';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
@@ -18,6 +18,11 @@ data_condition = [];
 % 1:16 : condition-specific models
 
 runIdx = 1;
+
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect group/latent selection or any timescale
+% calculation, and they are not compared with stored group or area names.
+group_names = {'V1', 'MT'};
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
@@ -48,6 +53,10 @@ jitter_seed = 1;
 save_each_condition_extraction_mat = false;
 
 rng(jitter_seed);
+
+group_names = normalizeGroupNamesLocal(group_names);
+[groupDisplayNames, groupFileTags] = ...
+    buildGroupLabelsLocal(group_names);
 
 %% ---------------- Setup -------------------------------------------------
 
@@ -152,6 +161,19 @@ for cond_i = 1:numConditions
         dsl_field, ...
         timescale_source);
 
+    validateGroupNameCountLocal( ...
+        group_names, ...
+        TimescaleStats.meta.numGroups);
+
+    TimescaleStats.meta.group_names = group_names;
+    TimescaleStats.meta.group_display_names = groupDisplayNames;
+    TimescaleStats.meta.group_file_tags = groupFileTags;
+
+    for g = 1:TimescaleStats.meta.numGroups
+        TimescaleStats.group(g).name = groupDisplayNames{g};
+        TimescaleStats.group(g).file_tag = groupFileTags{g};
+    end
+
     TimescaleStats.meta.data_content = data_content;
     TimescaleStats.meta.data_condition = this_condition;
     TimescaleStats.meta.use_condition_mode = use_condition_mode;
@@ -182,8 +204,10 @@ for cond_i = 1:numConditions
 
             if save_figures
                 for g = 1:numel(figHandles)
-                    figName = sprintf('timescale_distribution_%s_%s_group%d', ...
-                        source_tag, selection_tag, g);
+                    figName = sprintf('timescale_distribution_%s_%s_%s', ...
+                        source_tag, ...
+                        selection_tag, ...
+                        TimescaleStats.meta.group_file_tags{g});
                     saveAndCloseFigureLocal(figHandles(g), tempfname, figName);
                 end
             end
@@ -254,8 +278,12 @@ if use_condition_mode
 
     if save_figures
         for g = 1:numel(SummaryFigs)
-            figName = sprintf('%s_sum_all_conditions_timescale_distribution_%s_%s_group%d', ...
-                data_content, source_tag, selection_tag, g);
+            figName = sprintf( ...
+                '%s_sum_all_conditions_timescale_distribution_%s_%s_%s', ...
+                data_content, ...
+                source_tag, ...
+                selection_tag, ...
+                SummaryTimescale.meta.group_file_tags{g});
             saveAndCloseFigureLocal(SummaryFigs(g), '.', figName);
         end
     end
@@ -531,8 +559,12 @@ function figHandles = plotTimescaleStatsLocal( ...
     figHandles = gobjects(1, numGroups);
 
     for g = 1:numGroups
-        figTitle = sprintf('%s | %s | %s | %s | Group %d', ...
-            data_content, model_mode, timescale_source, selection_tag, g);
+        figTitle = sprintf('%s | %s | %s | %s | %s', ...
+            data_content, ...
+            model_mode, ...
+            timescale_source, ...
+            selection_tag, ...
+            TimescaleStats.group(g).name);
 
         figHandles(g) = plotOneGroupTimescaleDistributionLocal( ...
             TimescaleStats.group(g).values, ...
@@ -586,9 +618,22 @@ function [SummaryTimescale, figHandles] = summarizeAllConditionsTimescaleLocal( 
         sprintf('%s = %s', conditionMap.meta.stimDirLabels{2}, ...
             formatSummaryValueLocal(conditionMap.meta.stimDirValues(2)))};
 
+    firstTimescaleStats = AllConditionResults(1).TimescaleStats;
+    SummaryTimescale.meta.group_names = ...
+        firstTimescaleStats.meta.group_names;
+    SummaryTimescale.meta.group_display_names = ...
+        firstTimescaleStats.meta.group_display_names;
+    SummaryTimescale.meta.group_file_tags = ...
+        firstTimescaleStats.meta.group_file_tags;
+
     figHandles = gobjects(1, numGroups);
 
     for g = 1:numGroups
+
+        SummaryTimescale.group(g).name = ...
+            firstTimescaleStats.group(g).name;
+        SummaryTimescale.group(g).file_tag = ...
+            firstTimescaleStats.group(g).file_tag;
 
         dirValues = cell(1, 2);
         dirConditionIds = cell(1, 2);
@@ -636,8 +681,12 @@ function [SummaryTimescale, figHandles] = summarizeAllConditionsTimescaleLocal( 
                 dirValues{d};
         end
 
-        figTitle = sprintf('%s | %s | %s | %s | Group %d', ...
-            data_content, model_mode, timescale_source, selection_tag, g);
+        figTitle = sprintf('%s | %s | %s | %s | %s', ...
+            data_content, ...
+            model_mode, ...
+            timescale_source, ...
+            selection_tag, ...
+            SummaryTimescale.group(g).name);
 
         figHandles(g) = plotSplitDirGroupedTimescalePointsLocal( ...
             dirValues{1}, ...
@@ -1260,4 +1309,83 @@ function figHandle = plotOneGroupTimescaleDistributionLocal( ...
 
     box(ax, 'off');
     hold(ax, 'off');
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+    if numel(group_names) ~= numGroups
+        error([ ...
+            'group_names has %d entries, but the current DLAG model ', ...
+            'contains %d groups. The order of group_names must follow ', ...
+            'the model-group order.'], ...
+            numel(group_names), ...
+            numGroups);
+    end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+    nGroups = numel(group_names);
+    groupDisplayNames = cell(1, nGroups);
+    groupFileTags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        groupDisplayNames{g} = sprintf( ...
+            'Group %d: %s', ...
+            g, ...
+            group_names{g});
+
+        areaToken = makeSafeGroupNameTagLocal(group_names{g});
+        groupFileTags{g} = sprintf('G%02d_%s', g, areaToken);
+    end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+    tag = strtrim(char(string(groupName)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
 end

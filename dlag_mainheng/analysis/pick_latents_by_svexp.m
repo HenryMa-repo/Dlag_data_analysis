@@ -28,8 +28,13 @@ data_content = 'raw_count';
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
 % demean_pooledsd_within_condition
 
-data_condition = [1:16];   % [] for pooled all-condition mode, or e.g. 1:16
+data_condition = [];   % [] for pooled all-condition mode, or e.g. 1:16
 runIdx = 1;
+
+% Display/result labels only. Their order must follow the DLAG model-group
+% order. These names do not affect latent selection and are not compared
+% with any stored group or area name.
+group_names = {'V1', 'MT'};
 
 % Keep the smallest number of sorted latents that explain this fraction of
 % group shared variance. 0.95 means keep latents up to 95% cumulative shared
@@ -37,6 +42,8 @@ runIdx = 1;
 shared_varexp_threshold = 0.95;
 
 save_results = true;
+
+group_names = normalizeGroupNamesLocal(group_names);
 
 
 % -------------------------------------------------------------------------
@@ -99,10 +106,14 @@ for cond_i = 1:numConditions
     xDim_across = bestModel.xDim_across;
     xDim_within = reshape(bestModel.xDim_within, 1, []);
 
+    validateGroupNameCountLocal(group_names, numel(xDim_within));
+
     SVExpFilter = computeSVExpFilterLocal( ...
         varexp, xDim_across, xDim_within, shared_varexp_threshold);
-    
-    SVExpFilter.threshold=shared_varexp_threshold;
+
+    SVExpFilter.threshold = shared_varexp_threshold;
+    SVExpFilter.meta = struct();
+    SVExpFilter.meta.group_names = group_names;
 
 
 if save_results
@@ -233,5 +244,58 @@ function tag = thresholdTagLocal(threshold)
 tag = sprintf('threshold%.6g', threshold);
 tag = strrep(tag, '.', 'p');
 tag = strrep(tag, '-', 'm');
+
+end
+
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+
+end
+
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but bestModel.xDim_within ', ...
+        'contains %d DLAG groups. The order of group_names must ', ...
+        'follow the model-group order.'], ...
+        numel(group_names), ...
+        numGroups);
+end
 
 end

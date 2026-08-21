@@ -17,13 +17,18 @@ fprintf('Reading from %s \n', dat_file);
 load(dat_file);
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'demean_count_within_trial';
+data_content = 'raw_count';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
 
 runIdx = 1;
 baseDir = ['./FA_Dlag_', data_content];       % Base directory where results will be saved
+
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect run selection, latent selection, or any
+% ANOVA calculation, and they are not compared with stored group names.
+group_names = {'V1', 'MT'};
 
 % Extract all stim tags
 all_run_tags = get_all_run_tags(model_data_allruns);
@@ -51,6 +56,10 @@ tempfname = sprintf('%s/mat_results/run%03d', baseDir, runIdx);
 load(fullfile(tempfname, 'DSL_and_latent_category_stats.mat'), ...
     'DSL', 'bestModel', 'gp_params', 'ambiguousIdxs');
 
+group_names = normalize_group_names(group_names);
+validate_group_name_count( ...
+    group_names, numel(bestModel.xDim_within), 'bestModel.xDim_within');
+
 % get latent response, xsm
 files = dir(fullfile(tempfname, 'bestmodel*'));
 filename = fullfile(tempfname, files(1).name);
@@ -58,13 +67,13 @@ load(filename, "seqEst")
 
 % Results = analyze_dlag_latents_by_condition( ...
 %     condition_full, seqEst, bestModel.xDim_across, bestModel.xDim_within, ...
-%     gp_params, ambiguousIdxs, DSL, tempfname);
+%     gp_params, ambiguousIdxs, DSL, tempfname, group_names);
 
 Results_split_by_dir = analyze_dlag_latents_by_condition_split_by_dir( ...
     condition_full, seqEst, bestModel.xDim_across, bestModel.xDim_within, ...
-    gp_params, ambiguousIdxs, DSL, tempfname);
+    gp_params, ambiguousIdxs, DSL, tempfname, group_names);
 
-function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDim_across, xDim_within, gp_params, ambiguousIdxs, DSL, tempfname)
+function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDim_across, xDim_within, gp_params, ambiguousIdxs, DSL, tempfname, group_names)
 % analyze_dlag_latents_by_condition
 %
 % Analyze condition dependence of DLAG latent trajectories using:
@@ -107,6 +116,12 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     % ---------------------------------------------------------------------
     numGroups = numel(xDim_within);
     localDims = xDim_across + xDim_within;
+
+    group_names = normalize_group_names(group_names);
+    validate_group_name_count( ...
+        group_names, numGroups, 'analyze_dlag_latents_by_condition');
+    [groupDisplayNames, groupFileTags] = ...
+        build_group_labels(group_names);
 
     if ~isstruct(DSL) || ~isfield(DSL, 'logical')
         error('DSL must contain field DSL.logical.');
@@ -193,6 +208,9 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     Results.meta.alpha = alpha;
     Results.meta.timeAxis = tAxis;
     Results.meta.numGroups = numGroups;
+    Results.meta.group_names = group_names;
+    Results.meta.group_display_names = groupDisplayNames;
+    Results.meta.group_file_tags = groupFileTags;
     Results.meta.xDim_across = xDim_across;
     Results.meta.xDim_within = xDim_within;
     Results.meta.localDims = localDims;
@@ -225,7 +243,7 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     % Compute all per-group, per-latent condition summaries and ANOVAs
     % ---------------------------------------------------------------------
     for g = 1:numGroups
-        Results.group(g).name = sprintf('Group %d', g);
+        Results.group(g).name = groupDisplayNames{g};
         Results.group(g).latent = struct([]);
 
         for l = 1:localDims(g)
@@ -239,7 +257,7 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
             trialMean = mean(X, 2);
 
             latentInfo = make_latent_info( ...
-                g, l, xDim_across, acrossCategory, ...
+                g, groupDisplayNames{g}, l, xDim_across, acrossCategory, ...
                 DSL.logical{g}(l), DSL.logical_bystimdir{g}(l), ...
                 DSL.logical_bystimnamedir{g}(l), DSL.logical_bycondition{g}(l));
 
@@ -307,7 +325,8 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     for g = 1:numGroups
         for w = 1:xDim_within(g)
             l = xDim_across + w;
-            [figFile, pngFile] = plot_within_timecourse_figure(Results.group(g).latent(l), Results.meta.timeAxis, timeDir);
+            [figFile, pngFile] = plot_within_timecourse_figure( ...
+                Results.group(g).latent(l), Results.meta, timeDir);
             Results.group(g).latent(l).timecourse.figFile = figFile;
             Results.group(g).latent(l).timecourse.pngFile = pngFile;
         end
@@ -543,7 +562,7 @@ end
 % =========================================================================
 % Build one latent info struct for titles and labels
 % =========================================================================
-function latentInfo = make_latent_info(groupIdx, localIdx, xDim_across, acrossCategory, dslLogical, dslLogicalByStimDir, dslLogicalByStimNameDir, dslLogicalByCondition)
+function latentInfo = make_latent_info(groupIdx, groupDisplayName, localIdx, xDim_across, acrossCategory, dslLogical, dslLogicalByStimDir, dslLogicalByStimNameDir, dslLogicalByCondition)
 
     latentInfo = struct();
     latentInfo.groupIndex = groupIdx;
@@ -568,7 +587,7 @@ function latentInfo = make_latent_info(groupIdx, localIdx, xDim_across, acrossCa
     latentInfo.dslByConditionLabel = dsl_keep_remove_label(dslLogicalByCondition, 'bycondition');
 
     latentInfo.titleLines = { ...
-        sprintf('Group %d', groupIdx), ...
+        groupDisplayName, ...
         latentInfo.latentLine, ...
         latentInfo.dslLabel, ...
         latentInfo.dslByStimDirLabel, ...
@@ -910,15 +929,17 @@ end
 % =========================================================================
 % Plot one single-panel time-course figure for one within latent
 % =========================================================================
-function [figFile, pngFile] = plot_within_timecourse_figure(latentEntry, tAxis, timeDir)
+function [figFile, pngFile] = plot_within_timecourse_figure(latentEntry, meta, timeDir)
 
     g = latentEntry.groupIndex;
     w = latentEntry.withinIndex;
+    tAxis = meta.timeAxis;
+    groupFileTag = meta.group_file_tags{g};
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
     baseName = sanitize_filename(sprintf( ...
-        'G%02d_W%03d_tc', ...
-        g, w));
+        '%s_W%03d_tc', ...
+        groupFileTag, w));
 
     figFile = fullfile(timeDir, [baseName, '.fig']);
     pngFile = fullfile(timeDir, [baseName, '.png']);
@@ -983,16 +1004,18 @@ end
 function [figFile, pngFile] = plot_anova_summary_figure(latentEntry, meta, anovaDir, alpha)
 
     g = latentEntry.groupIndex;
+    groupFileTag = meta.group_file_tags{g};
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
     if strcmp(latentEntry.latentType, 'across')
         baseName = sanitize_filename(sprintf( ...
-            'G%02d_A%03d_%s_anova', ...
-            g, latentEntry.acrossIndex, latentEntry.acrossCategory));
+            '%s_A%03d_%s_anova', ...
+            groupFileTag, latentEntry.acrossIndex, ...
+            latentEntry.acrossCategory));
     else
         baseName = sanitize_filename(sprintf( ...
-            'G%02d_W%03d_anova', ...
-            g, latentEntry.withinIndex));
+            '%s_W%03d_anova', ...
+            groupFileTag, latentEntry.withinIndex));
     end
 
     figFile = fullfile(anovaDir, [baseName, '.fig']);
@@ -1224,6 +1247,80 @@ function out = sanitize_filename(in)
 end
 
 % =========================================================================
+% Normalize user-defined group display labels
+% =========================================================================
+function group_names = normalize_group_names(group_names)
+
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+% =========================================================================
+% Validate only the number/order of manually supplied group labels
+% =========================================================================
+function validate_group_name_count(group_names, numGroups, contextText)
+
+    if numel(group_names) ~= numGroups
+        error(['group_names has %d entries, but %s contains %d DLAG ', ...
+            'groups. The order of group_names must follow the model-group ', ...
+            'order.'], numel(group_names), contextText, numGroups);
+    end
+end
+
+% =========================================================================
+% Build long display names and short collision-safe file-name prefixes
+% =========================================================================
+function [groupDisplayNames, groupFileTags] = ...
+        build_group_labels(group_names)
+
+    nGroups = numel(group_names);
+    groupDisplayNames = cell(1, nGroups);
+    groupFileTags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        groupDisplayNames{g} = sprintf( ...
+            'Group %d: %s', g, group_names{g});
+
+        areaToken = sanitize_filename(group_names{g});
+        areaToken = regexprep(areaToken, '^_+|_+$', '');
+        if isempty(areaToken)
+            areaToken = 'area';
+        end
+
+        groupFileTags{g} = sprintf('G%02d_%s', g, areaToken);
+    end
+end
+
+% =========================================================================
 % Convert label to token for file names
 % =========================================================================
 function out = label_to_token(in)
@@ -1281,7 +1378,7 @@ end
 
 end
 
-function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full, seqEst, xDim_across, xDim_within, gp_params, ambiguousIdxs, DSL, tempfname)
+function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full, seqEst, xDim_across, xDim_within, gp_params, ambiguousIdxs, DSL, tempfname, group_names)
 % analyze_dlag_latents_by_condition_split_by_dir
 %
 % Analyze DLAG latent responses after splitting trials into two stimulus
@@ -1330,6 +1427,13 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
     % ---------------------------------------------------------------------
     numGroups = numel(xDim_within);
     localDims = xDim_across + xDim_within;
+
+    group_names = normalize_group_names(group_names);
+    validate_group_name_count( ...
+        group_names, numGroups, ...
+        'analyze_dlag_latents_by_condition_split_by_dir');
+    [groupDisplayNames, groupFileTags] = ...
+        build_group_labels(group_names);
 
     if ~isstruct(DSL) || ~isfield(DSL, 'logical')
         error('DSL must contain field DSL.logical.');
@@ -1418,6 +1522,9 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
     Results.meta.alpha = alpha;
     Results.meta.timeAxis = tAxis;
     Results.meta.numGroups = numGroups;
+    Results.meta.group_names = group_names;
+    Results.meta.group_display_names = groupDisplayNames;
+    Results.meta.group_file_tags = groupFileTags;
     Results.meta.xDim_across = xDim_across;
     Results.meta.xDim_within = xDim_within;
     Results.meta.localDims = localDims;
@@ -1456,7 +1563,7 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
     % Compute all per-group / per-latent / per-stim_dir summaries
     % ---------------------------------------------------------------------
     for g = 1:numGroups
-        Results.group(g).name = sprintf('Group %d', g);
+        Results.group(g).name = groupDisplayNames{g};
         Results.group(g).latent = struct([]);
 
         for l = 1:localDims(g)
@@ -1470,7 +1577,7 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
             trialMean = mean(X, 2);
 
             latentInfo = make_latent_info( ...
-                g, l, xDim_across, acrossCategory, ...
+                g, groupDisplayNames{g}, l, xDim_across, acrossCategory, ...
                 DSL.logical{g}(l), DSL.logical_bystimdir{g}(l), ...
                 DSL.logical_bystimnamedir{g}(l), DSL.logical_bycondition{g}(l));
 
@@ -1514,7 +1621,7 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
                     format_value(trialMeta.stimDirValues(d)));
 
                 titleLines = { ...
-                    sprintf('Group %d | %s', g, dirTitle), ...
+                    sprintf('%s | %s', groupDisplayNames{g}, dirTitle), ...
                     latentInfo.latentLine, ...
                     latentInfo.dslLabel, ...
                     latentInfo.dslByStimDirLabel, ...
@@ -1693,11 +1800,12 @@ function [figFile, pngFile] = dirsplit_plot_within_timecourse_figure(latentEntry
 
     g = latentEntry.groupIndex;
     w = latentEntry.withinIndex;
+    groupFileTag = meta.group_file_tags{g};
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
     baseName = sanitize_filename(sprintf( ...
-        'G%02d_W%03d_splitdir_tc', ...
-        g, w));
+        '%s_W%03d_splitdir_tc', ...
+        groupFileTag, w));
 
     figFile = fullfile(timeDir, [baseName, '.fig']);
     pngFile = fullfile(timeDir, [baseName, '.png']);
@@ -1737,7 +1845,9 @@ function [figFile, pngFile] = dirsplit_plot_within_timecourse_figure(latentEntry
         lgd.Layout.Tile = 'south';
     end
 
-    sgtitle(tl, sprintf('Within latent %d split by stimulus direction', w), 'Interpreter', 'none');
+    sgtitle(tl, sprintf( ...
+        '%s | Within latent %d split by stimulus direction', ...
+        meta.group_display_names{g}, w), 'Interpreter', 'none');
 
     savefig(fig, figFile);
     saveas(fig, pngFile);
@@ -1750,19 +1860,21 @@ end
 function [figFile, pngFile] = dirsplit_plot_anova_summary_figure(latentEntry, meta, anovaDir, alpha)
 
     g = latentEntry.groupIndex;
+    groupFileTag = meta.group_file_tags{g};
     dirLabel = latentEntry.stimDirLabel;
     dirValueStr = format_value(latentEntry.stimDirValue);
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
     if strcmp(latentEntry.latentType, 'across')
         baseName = sanitize_filename(sprintf( ...
-            'G%02d_A%03d_%s_%s%s_anova', ...
-            g, latentEntry.acrossIndex, latentEntry.acrossCategory, ...
+            '%s_A%03d_%s_%s%s_anova', ...
+            groupFileTag, latentEntry.acrossIndex, ...
+            latentEntry.acrossCategory, ...
             dirLabel, dirValueStr));
     else
         baseName = sanitize_filename(sprintf( ...
-            'G%02d_W%03d_%s%s_anova', ...
-            g, latentEntry.withinIndex, ...
+            '%s_W%03d_%s%s_anova', ...
+            groupFileTag, latentEntry.withinIndex, ...
             dirLabel, dirValueStr));
     end
 
@@ -1869,4 +1981,3 @@ a(finiteMask & abs(a) < tol) = 0;
 a(finiteMask & abs(a - 360) < tol) = 0;
 
 end
-

@@ -45,6 +45,11 @@ data_content = 'raw_count';
 
 runIdx = 1;
 
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect run selection, group/latent selection,
+% or any calculation, and they are not compared with stored group names.
+group_names = {'V1', 'MT'};
+
 % Red-blue comparison colors. Rows correspond to the two levels in
 % ascending numeric order. The SEM shade uses the same color as its mean
 % curve with FaceAlpha below, following the reference-program logic.
@@ -170,6 +175,11 @@ xDim_within = double(bestModel.xDim_within(:)');
 numGroups = numel(xDim_within);
 localDims = xDim_across + xDim_within;
 
+group_names = normalize_group_names_local(group_names);
+validate_group_name_count_local(group_names, numGroups);
+[groupDisplayNames, groupFileTags] = ...
+    build_group_labels_local(group_names);
+
 validate_dsl_local(DSL, localDims, numGroups);
 
 if isempty(seqEst)
@@ -226,6 +236,9 @@ for g = 1:numGroups
 
         latentInfo = make_latent_info_local( ...
             g, ...
+            group_names{g}, ...
+            groupDisplayNames{g}, ...
+            groupFileTags{g}, ...
             l, ...
             xDim_across, ...
             acrossCategory, ...
@@ -599,6 +612,9 @@ end
 
 function latentInfo = make_latent_info_local( ...
     groupIdx, ...
+    groupName, ...
+    groupDisplayName, ...
+    groupFileTag, ...
     localIdx, ...
     xDim_across, ...
     acrossCategory, ...
@@ -608,6 +624,9 @@ function latentInfo = make_latent_info_local( ...
 
 latentInfo = struct();
 latentInfo.groupIndex = groupIdx;
+latentInfo.groupName = groupName;
+latentInfo.groupDisplayName = groupDisplayName;
+latentInfo.groupFileTag = groupFileTag;
 latentInfo.localLatentIndex = localIdx;
 
 if localIdx <= xDim_across
@@ -704,18 +723,16 @@ function plot_one_group_latent_local( ...
     exportResolution, ...
     closeFigureAfterSaving)
 
-g = latentInfo.groupIndex;
-
 if strcmp(latentInfo.latentType, 'across')
     baseName = sanitize_filename_local(sprintf( ...
-        'G%02d_A%03d_%s_by_size_contrast_tc', ...
-        g, ...
+        '%s_A%03d_%s_by_size_contrast_tc', ...
+        latentInfo.groupFileTag, ...
         latentInfo.acrossIndex, ...
         latentInfo.acrossCategory));
 else
     baseName = sanitize_filename_local(sprintf( ...
-        'G%02d_W%03d_by_size_contrast_tc', ...
-        g, ...
+        '%s_W%03d_by_size_contrast_tc', ...
+        latentInfo.groupFileTag, ...
         latentInfo.withinIndex));
 end
 
@@ -767,7 +784,8 @@ for panelIdx = 1:4
         format_value_local(trialMeta.stimDirValues(d)));
 
     titleLines = { ...
-        sprintf('Group %d | %s | colored by %s', g, dirTitle, colorMode), ...
+        sprintf('%s | %s | colored by %s', ...
+            latentInfo.groupDisplayName, dirTitle, colorMode), ...
         latentInfo.latentLine, ...
         latentInfo.timescaleLine, ...
         latentInfo.dslLabel, ...
@@ -806,13 +824,13 @@ end
 
 if strcmp(latentInfo.latentType, 'across')
     overallTitle = sprintf( ...
-        'Group %d | Across latent %d | size- and contrast-colored time courses', ...
-        g, ...
+        '%s | Across latent %d | size- and contrast-colored time courses', ...
+        latentInfo.groupDisplayName, ...
         latentInfo.acrossIndex);
 else
     overallTitle = sprintf( ...
-        'Group %d | Within latent %d | size- and contrast-colored time courses', ...
-        g, ...
+        '%s | Within latent %d | size- and contrast-colored time courses', ...
+        latentInfo.groupDisplayName, ...
         latentInfo.withinIndex);
 end
 
@@ -983,6 +1001,85 @@ function out = sanitize_filename_local(in)
 
 out = regexprep(in, '[^a-zA-Z0-9_\-]', '_');
 out = regexprep(out, '_+', '_');
+
+end
+
+
+function group_names = normalize_group_names_local(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+
+end
+
+
+function validate_group_name_count_local(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but bestModel.xDim_within ', ...
+        'contains %d DLAG groups. The order of group_names must ', ...
+        'follow the model-group order.'], ...
+        numel(group_names), ...
+        numGroups);
+end
+
+end
+
+
+function [groupDisplayNames, groupFileTags] = ...
+        build_group_labels_local(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf( ...
+        'Group %d: %s', ...
+        g, ...
+        group_names{g});
+
+    areaToken = sanitize_filename_local(group_names{g});
+    areaToken = regexprep(areaToken, '^_+|_+$', '');
+
+    if isempty(areaToken)
+        areaToken = 'area';
+    end
+
+    groupFileTags{g} = sprintf('G%02d_%s', g, areaToken);
+end
 
 end
 
