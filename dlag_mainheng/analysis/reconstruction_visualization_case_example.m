@@ -37,6 +37,11 @@ data_condition = [];
 
 runIdx = 1;
 
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect neuron selection and are not compared
+% with any stored group or area names.
+group_names = {'V1', 'MT'};
+
 % Used to map trialId back to condition and to obtain short labels such as
 % G-S-L, G-L-H, P-S-L, etc.
 dat_file = fullfile('.', 'model_data_allruns');
@@ -45,8 +50,8 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 % Three LOCAL neuron IDs for each group. Replace these example values with
 % the neuron IDs to be shown. The cell order is group 1, group 2, ... .
 case_neuron_ids = { ...
-    [1 65 155], ...  % Group 1
-    [137 160 218]  ...  % Group 2
+    [31 10 52], ...  % Group 1
+    [20 83 112]  ...  % Group 2
     };
 
 % Fixed column order for the case-example figure.
@@ -112,6 +117,9 @@ end
 
 analysis_fields = normalizeFieldListLocal(analysis_fields);
 column_labels = normalizeLabelListLocal(column_labels);
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
 
 if numel(analysis_fields) ~= numel(column_labels)
     error('analysis_fields and column_labels must have the same length.');
@@ -221,6 +229,7 @@ if isempty(yDims) || any(yDims <= 0)
 end
 
 numGroups = numel(yDims);
+validateGroupNameCountLocal(group_names, numGroups);
 case_neuron_ids = validateCaseNeuronIdsLocal( ...
     case_neuron_ids, yDims, numGroups);
 
@@ -241,18 +250,20 @@ for groupIdx = 1:numGroups
     nNeurons = numel(selectedLocalNeuronIds);
 
     fprintf('\n============================================================\n');
-    fprintf('Group %d: local neuron IDs %s\n', ...
-        groupIdx, mat2str(selectedLocalNeuronIds));
+    fprintf('%s: local neuron IDs %s\n', ...
+        group_display_names{groupIdx}, mat2str(selectedLocalNeuronIds));
 
     allVals = collectValuesForColorLimitLocal( ...
         dataBlocks, analysis_fields, selectedGlobalRows);
     climVals = robustColorLimitsLocal(allVals, color_percentiles);
 
-    fprintf('Group %d shared color limit across all panels: [%g, %g]\n', ...
-        groupIdx, climVals(1), climVals(2));
+    fprintf('%s shared color limit across all panels: [%g, %g]\n', ...
+        group_display_names{groupIdx}, climVals(1), climVals(2));
 
-    figureName = sprintf('%s_case_example_%s_group%d_%dneuron', ...
-        data_content, modeTag, groupIdx, nNeurons);
+    % The area label is included in the MATLAB figure-window name and the
+    % saved filename only. It is intentionally not drawn inside the figure.
+    figureName = sprintf('%s_case_example_%s_%s_%dneuron', ...
+        data_content, modeTag, group_file_tags{groupIdx}, nNeurons);
 
     fig = plotCaseExampleGroupLocal( ...
         dataBlocks, analysis_fields, column_labels, ...
@@ -1235,4 +1246,73 @@ function cleanAxisLocal(ax, fontName, fontSize)
         'LineWidth', 1, ...
         'FontName', fontName, ...
         'FontSize', fontSize);
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+    if numel(group_names) ~= numGroups
+        error([ ...
+            'group_names has %d entries, but the current DLAG model ', ...
+            'contains %d groups. The order of group_names must follow ', ...
+            'the model-group order.'], numel(group_names), numGroups);
+    end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+    nGroups = numel(group_names);
+    groupDisplayNames = cell(1, nGroups);
+    groupFileTags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+        groupFileTags{g} = sprintf( ...
+            'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+    end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+    tag = strtrim(char(string(groupName)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
 end

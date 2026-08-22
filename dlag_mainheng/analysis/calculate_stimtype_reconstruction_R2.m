@@ -32,9 +32,11 @@
 % are retained.
 %
 % Unit IDs are read from the same model_data_allruns entry used to prepare
-% the reconstruction data. For nan_trial_strategy == 6, data-content-
-% specific unit-ID fields are required; otherwise standard probe unit-ID
-% fields are required.
+% the reconstruction data. The saved group_probe and groupd arrays define
+% how each probe-level unit-ID vector is split into model groups. No stored
+% group/area name is read or compared. For nan_trial_strategy == 6,
+% data-content-specific groupd and unit-ID fields are used; otherwise the
+% standard groupd and probe unit-ID fields are used.
 %
 % Output variable:
 %   stimtype_recon_R2
@@ -61,7 +63,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'demean_count_within_trial';
+data_content = 'raw_count';
 % Common options:
 %   raw_count
 %   raw_fr
@@ -81,12 +83,15 @@ data_condition = [];
 
 runIdx = 1;
 
-% Metadata used to map trialId to stimulus type and to read group unit IDs.
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect trial, neuron, or R2 selection and are
+% not compared with any stored group or area names.
+group_names = {'V1', 'MT'};
+
+% Metadata used to map trialId to stimulus type and to recover unit IDs in
+% the already-defined model-group order.
 dat_file = fullfile('.', 'model_data_allruns');
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-
-% Group 1 corresponds to probe 0 and Group 2 corresponds to probe 1.
-probe_ids = [0, 1];
 
 %% ------------------------------------------------------------------------
 % Reconstruction fields included in this analysis
@@ -131,6 +136,10 @@ else
     end
 end
 
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
+
 output_file_name = sprintf('%s_%s_stimtype_R2_%s.mat', ...
     data_content, model_mode, reconstruction_suffix);
 
@@ -141,6 +150,10 @@ fprintf('model_mode   : %s\n', model_mode);
 fprintf('runIdx       : %d\n', runIdx);
 fprintf('stim_tag     : %s\n', stim_tag);
 fprintf('dat_file     : %s\n', dat_file);
+fprintf('group labels :\n');
+for g = 1:numel(group_names)
+    fprintf('  %s\n', group_display_names{g});
+end
 fprintf('============================================================\n');
 
 %% ------------------------------------------------------------------------
@@ -182,8 +195,8 @@ end
 
 validateAllConditionStimNamesLocal(conditions_full);
 
-unit_ids_by_group = getModelUnitIdsByGroupLocal( ...
-    metadata_run, data_content, probe_ids);
+[unit_ids_by_group, metadata_groupd, metadata_groupd_field] = ...
+    getModelUnitIdsByGroupLocal(metadata_run, data_content);
 
 %% ------------------------------------------------------------------------
 % Locate model files and build source list
@@ -256,17 +269,26 @@ for i = 1:numel(source_specs)
     end
 end
 
-if numel(yDims_ref) ~= numel(probe_ids)
-    error(['The reconstruction has %d groups, but probe_ids contains %d ' ...
-        'entries.'], numel(yDims_ref), numel(probe_ids));
+validateGroupNameCountLocal(group_names, numel(yDims_ref));
+
+if ~isequal(metadata_groupd, yDims_ref)
+    error([ ...
+        'The model metadata field %s contains group sizes %s, whereas ', ...
+        'the reconstruction yDims is %s. Unit IDs cannot be aligned to ', ...
+        'the reconstruction rows.'], ...
+        metadata_groupd_field, mat2str(metadata_groupd), mat2str(yDims_ref));
 end
 
 for g = 1:numel(yDims_ref)
     if numel(unit_ids_by_group{g}) ~= yDims_ref(g)
-        error(['Group %d neuron count mismatch between model_data_allruns ' ...
+        error(['%s neuron count mismatch between model_data_allruns ' ...
             'and reconstruction: %d unit IDs versus yDims(%d) = %d.'], ...
-            g, numel(unit_ids_by_group{g}), g, yDims_ref(g));
+            group_display_names{g}, numel(unit_ids_by_group{g}), ...
+            g, yDims_ref(g));
     end
+
+    fprintf('  %s | neurons %d\n', ...
+        group_display_names{g}, yDims_ref(g));
 end
 
 %% ------------------------------------------------------------------------
@@ -284,8 +306,11 @@ stimtype_recon_R2.stim_tag = stim_tag;
 stimtype_recon_R2.metadata_run_idx = metadata_run_idx;
 stimtype_recon_R2.dat_file = resolveMatFileLocal(dat_file);
 stimtype_recon_R2.yDims = yDims_ref;
-stimtype_recon_R2.probe_ids = probe_ids;
+stimtype_recon_R2.group_names = group_names;
+stimtype_recon_R2.group_display_names = group_display_names;
+stimtype_recon_R2.group_file_tags = group_file_tags;
 stimtype_recon_R2.unit_ids_by_group = unit_ids_by_group;
+stimtype_recon_R2.unit_id_groupd_source_field = metadata_groupd_field;
 stimtype_recon_R2.reconstruction_specs = r2_specs;
 stimtype_recon_R2.reconstruction_suffix = reconstruction_suffix;
 stimtype_recon_R2.source_files = {source_specs.best_file};
@@ -634,16 +659,66 @@ function checkSeqEstFieldsLocal(seqEst, r2_specs, yDim)
     end
 end
 
-function unit_ids_by_group = getModelUnitIdsByGroupLocal( ...
-    metadata_run, data_content, probe_ids)
+function [unit_ids_by_group, groupd, groupd_field] = ...
+        getModelUnitIdsByGroupLocal(metadata_run, data_content)
+% Recover unit IDs in model-group order without using stored area names.
+%
+% model_data_prepar_with_trialshuffle.m stores one unit-ID vector per
+% probe. Within each probe vector, units are concatenated in the same
+% model-group order described by group_probe and groupd. Therefore a probe
+% containing multiple area groups is split by their saved group sizes.
 
     requireFieldLocal(metadata_run, 'nan_trial_strategy', 'metadata run');
+    requireFieldLocal(metadata_run, 'group_probe', 'metadata run');
+
     nan_trial_strategy = double(metadata_run.nan_trial_strategy);
 
-    unit_ids_by_group = cell(1, numel(probe_ids));
+    if ~isscalar(nan_trial_strategy) || ~isfinite(nan_trial_strategy)
+        error('metadata_run.nan_trial_strategy must be one finite scalar.');
+    end
 
-    for g = 1:numel(probe_ids)
-        probe_id = probe_ids(g);
+    if nan_trial_strategy == 6
+        groupd_field = sprintf('%s_groupd', data_content);
+    else
+        groupd_field = 'groupd';
+    end
+
+    requireFieldLocal(metadata_run, groupd_field, 'metadata run');
+
+    groupd = double(metadata_run.(groupd_field));
+    groupd = reshape(groupd, 1, []);
+
+    group_probe = double(metadata_run.group_probe);
+    group_probe = reshape(group_probe, 1, []);
+
+    if isempty(groupd)
+        error('metadata_run.%s is empty.', groupd_field);
+    end
+
+    if numel(group_probe) ~= numel(groupd)
+        error([ ...
+            'metadata_run.group_probe contains %d entries, whereas ', ...
+            'metadata_run.%s contains %d group sizes.'], ...
+            numel(group_probe), groupd_field, numel(groupd));
+    end
+
+    if any(~isfinite(groupd)) || any(groupd < 1) || ...
+            any(groupd ~= round(groupd))
+        error('metadata_run.%s must contain positive integer group sizes.', ...
+            groupd_field);
+    end
+
+    if any(~isfinite(group_probe)) || any(group_probe < 0) || ...
+            any(group_probe ~= round(group_probe))
+        error('metadata_run.group_probe must contain nonnegative integer probe IDs.');
+    end
+
+    nGroups = numel(groupd);
+    unit_ids_by_group = cell(1, nGroups);
+    unique_probes = unique(group_probe, 'stable');
+
+    for p = 1:numel(unique_probes)
+        probe_id = unique_probes(p);
 
         if nan_trial_strategy == 6
             fieldName = sprintf('%s_probe%d_usedunit_ids', ...
@@ -653,7 +728,7 @@ function unit_ids_by_group = getModelUnitIdsByGroupLocal( ...
         end
 
         if ~isfield(metadata_run, fieldName)
-            error(['model_data_allruns entry is missing required unit-ID ' ...
+            error(['model_data_allruns entry is missing required unit-ID ', ...
                 'field %s for data_content %s and nan_trial_strategy %g.'], ...
                 fieldName, data_content, nan_trial_strategy);
         end
@@ -671,7 +746,29 @@ function unit_ids_by_group = getModelUnitIdsByGroupLocal( ...
             error('Unit-ID field %s contains duplicate IDs.', fieldName);
         end
 
-        unit_ids_by_group{g} = ids;
+        group_indices = find(group_probe == probe_id);
+        expected_count = sum(groupd(group_indices));
+
+        if numel(ids) ~= expected_count
+            error([ ...
+                'Unit-ID field %s contains %d IDs, but model groups %s ', ...
+                'assigned to that probe require %d IDs according to %s.'], ...
+                fieldName, numel(ids), mat2str(group_indices), ...
+                expected_count, groupd_field);
+        end
+
+        next_id = 1;
+
+        for k = 1:numel(group_indices)
+            g = group_indices(k);
+            last_id = next_id + groupd(g) - 1;
+            unit_ids_by_group{g} = ids(next_id:last_id);
+            next_id = last_id + 1;
+        end
+    end
+
+    if any(cellfun(@isempty, unit_ids_by_group))
+        error('At least one model group did not receive unit IDs.');
     end
 end
 
@@ -812,4 +909,73 @@ function fname = findOneFileLocal(parentDir, pattern, mustExist)
     [~, idx] = sort([files.datenum], 'descend');
     files = files(idx);
     fname = fullfile(parentDir, files(1).name);
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+    if numel(group_names) ~= numGroups
+        error([ ...
+            'group_names has %d entries, but the current DLAG model ', ...
+            'contains %d groups. The order of group_names must follow ', ...
+            'the model-group order.'], numel(group_names), numGroups);
+    end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+    nGroups = numel(group_names);
+    groupDisplayNames = cell(1, nGroups);
+    groupFileTags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+        groupFileTags{g} = sprintf( ...
+            'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+    end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+    tag = strtrim(char(string(groupName)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
 end

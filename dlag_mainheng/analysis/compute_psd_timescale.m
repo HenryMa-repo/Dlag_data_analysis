@@ -11,7 +11,8 @@
 %   PSD_timescale.local(g).period_ms =
 %       [across latents, within-area latents for group g]
 %
-% This local order matches the latent order used by plot_timescale_compare.
+% This local order matches the DLAG local latent order used by
+% data_reconstruction.m when psd-timescale reconstruction is requested.
 
 clear;
 clc;
@@ -38,6 +39,12 @@ data_condition = [];
 % 1:16 : condition-specific models, folders FA_Dlag_<data_content>_conditionN
 
 runIdx = 1;
+
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect latent selection, PSD calculation, or
+% any other data operation, and they are not compared with stored group or
+% area names.
+group_names = {'V1', 'MT'};
 
 % Stimulus tag used to find the matching run in model_data_allruns.
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
@@ -76,6 +83,10 @@ if ~(ischar(stim_tag) || isstring(stim_tag))
     error('stim_tag must be a character vector or string.');
 end
 stim_tag = char(stim_tag);
+
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
 
 if ~isempty(data_condition)
     if ~isnumeric(data_condition) || any(~isfinite(data_condition(:)))
@@ -132,6 +143,10 @@ fprintf('Session dir: %s\n', session_dir);
 fprintf('Data content: %s\n', data_content);
 fprintf('Run index: %03d\n', runIdx);
 fprintf('Stim tag: %s\n', stim_tag);
+fprintf('Manual model-group labels:\n');
+for g = 1:numel(group_names)
+    fprintf('  %s\n', group_display_names{g});
+end
 fprintf('All-condition PSD average mode: %s\n', all_condition_psd_average_mode);
 fprintf('Welch window length: %d bins\n', pwelch_window_len_bins);
 fprintf('Peak prominence fraction: %.6g\n', peak_prominence_frac);
@@ -171,7 +186,10 @@ for ti = 1:numel(targets)
             stim_tag, ...
             all_condition_psd_average_mode, ...
             pwelch_window_len_bins, ...
-            peak_prominence_frac);
+            peak_prominence_frac, ...
+            group_names, ...
+            group_display_names, ...
+            group_file_tags);
 
         output_file = fullfile(target.run_dir, 'psd_timescale_stats.mat');
 
@@ -296,7 +314,7 @@ end
 function PSD_timescale = computePsdTimescaleForRunLocal( ...
     run_dir, session_dir, data_content, model_mode, condition_index, runIdx, ...
     stim_tag, all_condition_psd_average_mode, pwelch_window_len_bins, ...
-    peak_prominence_frac)
+    peak_prominence_frac, group_names, group_display_names, group_file_tags)
 
 if ~isfolder(run_dir)
     error('Run folder does not exist:\n%s', run_dir);
@@ -327,6 +345,8 @@ xDim_within = getXDimWithinLocal(bestModel);
 
 numGroups = numel(xDim_within);
 
+validateGroupNameCountLocal(group_names, numGroups);
+
 bin_width_ms = getBinWidthMsLocal(S);
 Fs_hz = 1000 / bin_width_ms;
 
@@ -355,16 +375,25 @@ fprintf('Bestmodel:\n  %s\n', bestmodel_file);
 fprintf('Latent layout: %s\n', latent_layout.layout_type);
 fprintf('Latent dims: xDim_across = %d, xDim_within = [%s]\n', ...
     xDim_across, num2str(xDim_within));
+for g = 1:numGroups
+    fprintf('  %s: xDim_within = %d\n', ...
+        group_display_names{g}, xDim_within(g));
+end
 fprintf('seqEst: %d trials, %d time bins, bin width %.6g ms\n', ...
     n_trials, n_time_bins, bin_width_ms);
 fprintf('PSD average mode used for this target: %s\n', effective_psd_average_mode);
 
 win = makeHanningWindowLocal(pwelch_window_len_bins);
 
-across_rows_group1 = latent_layout.across_rows{1};
+% DLAG across latents are shared across groups. In the group-block xsm
+% layout, the group copies differ by their fitted temporal shifts. The
+% first group copy remains the canonical reference used to produce the one
+% shared PSD_timescale.across result expected by data_reconstruction.m.
+across_reference_group = 1;
+across_rows_reference = latent_layout.across_rows{across_reference_group};
 
 across_stats = computeRowsPsdLocal( ...
-    seqEst, across_rows_group1, latent_layout.total_latent_dim, ...
+    seqEst, across_rows_reference, latent_layout.total_latent_dim, ...
     Fs_hz, win, pwelch_overlap_bins, nfft, peak_prominence_frac, ...
     effective_psd_average_mode, condition_info.condition_index_per_trial);
 
@@ -394,6 +423,11 @@ local_stats = struct( ...
     'is_multi_peak', cell(1, numGroups));
 
 for g = 1:numGroups
+    local_stats(g).group_index = g;
+    local_stats(g).group_name = group_names{g};
+    local_stats(g).group_display_name = group_display_names{g};
+    local_stats(g).group_file_tag = group_file_tags{g};
+
     local_stats(g).center_frequency_hz = [ ...
         across_stats.center_frequency_hz, ...
         within_stats{g}.center_frequency_hz];
@@ -426,10 +460,15 @@ PSD_timescale.meta.runIdx = runIdx;
 PSD_timescale.meta.stim_tag = stim_tag;
 PSD_timescale.meta.bestmodel_file = bestmodel_file;
 PSD_timescale.meta.run_dir = run_dir;
+PSD_timescale.meta.group_names = group_names;
+PSD_timescale.meta.group_display_names = group_display_names;
+PSD_timescale.meta.group_file_tags = group_file_tags;
 
 PSD_timescale.meta.timescale_source = 'psd-timescale';
 PSD_timescale.meta.latent_field = 'xsm';
-PSD_timescale.meta.across_latent_psd_source = 'group1 across rows in seqEst(n).xsm';
+PSD_timescale.meta.across_reference_group = across_reference_group;
+PSD_timescale.meta.across_latent_psd_source = ...
+    'canonical shared-across copy from model group 1 in seqEst(n).xsm';
 PSD_timescale.meta.local_latent_order = '[across latents, within-area latents for this group]';
 
 PSD_timescale.meta.requested_all_condition_psd_average_mode = all_condition_psd_average_mode;
@@ -1442,4 +1481,77 @@ else
     nSegments = 1 + floor((nTime - winLen) / step);
 end
 
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but the current DLAG model contains ', ...
+        '%d groups. The order of group_names must follow the model-group ', ...
+        'order.'], numel(group_names), numGroups);
+end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+    groupFileTags{g} = sprintf( ...
+        'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+tag = strtrim(char(string(groupName)));
+tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+tag = regexprep(tag, '_+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+
+if isempty(tag)
+    tag = 'area';
+end
 end

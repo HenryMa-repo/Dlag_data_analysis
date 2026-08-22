@@ -39,8 +39,8 @@
 %         8) feedback delta R2 violin:
 %              all-use, all-excl, use-excl
 %
-% Each scatter point is one neuron.
-% Group 1 and Group 2 are plotted using different colors.
+% Each scatter point is one neuron. Model groups are plotted using the
+% user-specified display labels and group colors below.
 %
 % In each-condition mode, this script can also plot one extra
 % pooled-across-conditions R2 figure, using the output from:
@@ -61,16 +61,21 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'z_across_conditions';
+data_content = 'raw_count';
 % options usually include:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
 % demean_pooledsd_within_condition
 
-data_condition = [1:16];
+data_condition = [];
 % [] for pooled all-condition mode, or e.g. 1:16 for condition mode.
 
 runIdx = 1;
+
+% Display labels only. Their order must follow the DLAG model-group order.
+% These names do not affect R2 selection and are not compared with names
+% stored in recon_R2 or model_data_allruns.
+group_names = {'V1', 'MT'};
 
 % Plot mode.
 % Options:
@@ -109,8 +114,9 @@ violin_point_size = 3;
 violin_point_jitter_width = 0.08;
 violin_point_alpha = 0.35;
 
-% Same colors as RF_analysis.m.
-probe_colors = [
+% One color per model group. These are the same first two colors used by
+% RF_analysis.m. Add rows here if the model contains more groups.
+group_colors = [
     0.0000, 0.4470, 0.7410;
     0.8500, 0.3250, 0.0980
 ];
@@ -125,6 +131,9 @@ if isempty(scriptDir)
 end
 
 plotSpec = getPlotModeSpecLocal(plot_mode);
+
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, ~] = buildGroupLabelsLocal(group_names);
 
 condition_fig_base_name = sprintf('reconstruction_R2_comparison_%s', ...
     plotSpec.fileSuffix);
@@ -233,7 +242,8 @@ for cond_i = 1:numConditions
         recon_R2, ...
         titleLabel, ...
         plotSpec, ...
-        probe_colors, ...
+        group_display_names, ...
+        group_colors, ...
         marker_size, ...
         use_marker_alpha, ...
         figure_visible, ...
@@ -295,7 +305,8 @@ if use_condition_mode && plot_pooled_conditions_R2
         recon_R2, ...
         pooledTitleLabel, ...
         plotSpec, ...
-        probe_colors, ...
+        group_display_names, ...
+        group_colors, ...
         marker_size, ...
         use_marker_alpha, ...
         figure_visible, ...
@@ -436,7 +447,8 @@ plotSpec.requiredTopFields = unique(requiredFields, 'stable');
 end
 
 function fig = plotOneReconstructionR2FigureLocal( ...
-    recon_R2, titleLabel, plotSpec, probe_colors, marker_size, use_marker_alpha, ...
+    recon_R2, titleLabel, plotSpec, groupDisplayNames, group_colors, ...
+    marker_size, use_marker_alpha, ...
     figure_visible, violin_width, violin_face_alpha, show_violin_median, ...
     show_violin_points, violin_point_size, violin_point_jitter_width, ...
     violin_point_alpha)
@@ -449,8 +461,10 @@ numScatterPlots = size(scatterSpecs, 1);
 x0_by_group = recon_R2.use_all.neuron_by_group;
 numGroups = numel(x0_by_group);
 
-if size(probe_colors, 1) < numGroups
-    warning(['probe_colors has fewer rows than number of groups. ', ...
+validateGroupNameCountLocal(groupDisplayNames, numGroups);
+
+if size(group_colors, 1) < numGroups
+    warning(['group_colors has fewer rows than number of groups. ', ...
         'Extra groups will be plotted in black.']);
 end
 
@@ -492,7 +506,8 @@ allDeltaVals = [];
 for d = 1:numel(deltaSpecs)
 
     deltaValsByRow{d} = computeDeltaR2ByGroupLocal( ...
-        recon_R2, deltaSpecs(d).useField, deltaSpecs(d).exclField);
+        recon_R2, deltaSpecs(d).useField, deltaSpecs(d).exclField, ...
+        groupDisplayNames);
 
     for c = 1:size(deltaValsByRow{d}, 1)
         for g = 1:numGroups
@@ -556,9 +571,9 @@ for p = 1:numScatterPlots
         y = y_by_group{g}(:);
 
         if numel(x) ~= numel(y)
-            error(['Group %d has mismatched neuron counts between %s ', ...
+            error(['%s has mismatched neuron counts between %s ', ...
                 'and %s: %d vs %d.'], ...
-                g, xField, yField, numel(x), numel(y));
+                groupDisplayNames{g}, xField, yField, numel(x), numel(y));
         end
 
         valid = isfinite(x) & isfinite(y);
@@ -566,8 +581,8 @@ for p = 1:numScatterPlots
         x = x(valid);
         y = y(valid);
 
-        if g <= size(probe_colors, 1)
-            thisColor = probe_colors(g, :);
+        if g <= size(group_colors, 1)
+            thisColor = group_colors(g, :);
         else
             thisColor = [0, 0, 0];
         end
@@ -582,12 +597,12 @@ for p = 1:numScatterPlots
                 'MarkerEdgeColor', thisColor, ...
                 'MarkerFaceAlpha', 0.65, ...
                 'MarkerEdgeAlpha', 0.65, ...
-                'DisplayName', sprintf('Group %d neurons', g));
+                'DisplayName', sprintf('%s neurons', groupDisplayNames{g}));
         else
             scatter(ax, x, y, marker_size, ...
                 'MarkerFaceColor', thisColor, ...
                 'MarkerEdgeColor', thisColor, ...
-                'DisplayName', sprintf('Group %d neurons', g));
+                'DisplayName', sprintf('%s neurons', groupDisplayNames{g}));
         end
     end
 
@@ -617,7 +632,7 @@ for d = 1:numel(deltaSpecs)
     plotDeltaViolinLocal( ...
         axDelta, ...
         deltaValsByRow{d}, ...
-        probe_colors, ...
+        group_colors, ...
         deltaLimVals, ...
         violin_width, ...
         violin_face_alpha, ...
@@ -633,7 +648,8 @@ sgtitle(t, sprintf('%s | %s', titleLabel, plotSpec.sgtitleText), ...
     'Interpreter', 'none');
 end
 
-function deltaVals = computeDeltaR2ByGroupLocal(recon_R2, useField, exclField)
+function deltaVals = computeDeltaR2ByGroupLocal( ...
+    recon_R2, useField, exclField, groupDisplayNames)
 % Compute three delta R2 types by group:
 %   1) all-use  = use_all - use
 %   2) all-excl = use_all - excl
@@ -657,7 +673,8 @@ for g = 1:numGroups
     r2_excl = excl_by_group{g}(:);
 
     if numel(r2_all) ~= numel(r2_use) || numel(r2_all) ~= numel(r2_excl)
-        error('Group %d has mismatched neuron counts for delta R2 computation.', g);
+        error('%s has mismatched neuron counts for delta R2 computation.', ...
+            groupDisplayNames{g});
     end
 
     deltaVals{1, g} = r2_all - r2_use;
@@ -667,7 +684,7 @@ end
 end
 
 function plotDeltaViolinLocal( ...
-    ax, deltaVals, probe_colors, deltaLimVals, violin_width, ...
+    ax, deltaVals, group_colors, deltaLimVals, violin_width, ...
     violin_face_alpha, show_violin_median, show_violin_points, ...
     violin_point_size, violin_point_jitter_width, violin_point_alpha, ...
     plotTitle)
@@ -707,8 +724,8 @@ for c = 1:numDeltaTypes
             continue;
         end
 
-        if g <= size(probe_colors, 1)
-            thisColor = probe_colors(g, :);
+        if g <= size(group_colors, 1)
+            thisColor = group_colors(g, :);
         else
             thisColor = [0, 0, 0];
         end
@@ -1261,4 +1278,77 @@ densityAtVals = densityFloor + (1 - densityFloor) .* densityAtVals;
 localWidth = maxJitterWidth .* densityAtVals;
 
 xJitter = xPos + (rand(size(vals)) - 0.5) .* 2 .* localWidth;
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+end
+
+function validateGroupNameCountLocal(groupLabels, numGroups)
+
+if numel(groupLabels) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but the current reconstruction ', ...
+        'contains %d groups. The order of group_names must follow the ', ...
+        'model-group order.'], numel(groupLabels), numGroups);
+end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+    groupFileTags{g} = sprintf( ...
+        'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+tag = strtrim(char(string(groupName)));
+tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+tag = regexprep(tag, '_+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+
+if isempty(tag)
+    tag = 'area';
+end
 end

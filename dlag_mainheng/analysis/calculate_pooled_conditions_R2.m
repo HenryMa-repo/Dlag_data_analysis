@@ -88,6 +88,11 @@ data_condition = [1:16];
 
 runIdx = 1;
 
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect R2 calculation and are not compared
+% with any stored group or area names.
+group_names = {'V1', 'MT'};
+
 output_file_name = sprintf('%s_sum_all_conditions_reconstruction_R2.mat', data_content);
 
 %% ------------------------------------------------------------------------
@@ -100,6 +105,10 @@ end
 
 condition_list = data_condition(:)';
 numConditions = numel(condition_list);
+
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
 
 scriptDir = fileparts(mfilename('fullpath'));
 if isempty(scriptDir)
@@ -176,6 +185,13 @@ for cond_i = 1:numConditions
 end
 
 numGroups = numel(yDims_ref);
+validateGroupNameCountLocal(group_names, numGroups);
+
+fprintf('\nModel groups used for pooled R2:\n');
+for g = 1:numGroups
+    fprintf('  %s | neurons %d\n', ...
+        group_display_names{g}, yDims_ref(g));
+end
 
 %% ------------------------------------------------------------------------
 % First pass: compute pooled per-neuron mean for each reconstruction field
@@ -338,6 +354,15 @@ end
 
 % Save as recon_R2 so plotting code can reuse the same variable name.
 recon_R2 = recon_R2_pooled_conditions;
+recon_R2.meta = struct();
+recon_R2.meta.group_names = group_names;
+recon_R2.meta.group_display_names = group_display_names;
+recon_R2.meta.group_file_tags = group_file_tags;
+recon_R2.meta.yDims = yDims_ref;
+recon_R2.meta.data_content = data_content;
+recon_R2.meta.data_condition = condition_list;
+recon_R2.meta.runIdx = runIdx;
+recon_R2.meta.pooling = 'concatenate selected conditions before R2 calculation';
 
 %% ------------------------------------------------------------------------
 % Save
@@ -566,4 +591,77 @@ end
 files = files(idx);
 
 fname = fullfile(parentDir, files(1).name);
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but the current DLAG model contains ', ...
+        '%d groups. The order of group_names must follow the model-group ', ...
+        'order.'], numel(group_names), numGroups);
+end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+    groupFileTags{g} = sprintf( ...
+        'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+tag = strtrim(char(string(groupName)));
+tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+tag = regexprep(tag, '_+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+
+if isempty(tag)
+    tag = 'area';
+end
 end

@@ -47,6 +47,11 @@ data_condition = [];
 
 runIdx = 1;
 
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect neuron selection and are not compared
+% with any stored group or area names.
+group_names = {'V1', 'MT'};
+
 % Used to map trialId back to condition and to get condition labels such as
 % G-S-L, G-L-H, P-S-L, etc.
 dat_file = fullfile('.', 'model_data_allruns');
@@ -96,10 +101,17 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 %   yRecon_feedforward_excl_within
 %   yRecon_feedforward_excl_fb_ambiguous
 %
-analysis_fields = {'yRecon_use_feedback'};
+analysis_fields = { ...
+    'y', ...
+    'yRecon_use_within', ...
+    'yRecon_use_across', ...
+    'yRecon_use_feedforward', ...
+    'yRecon_use_feedback'};
 
-% Number of randomly selected example neurons per group.
-n_example_neurons = 10;
+% Number of randomly selected example neurons per group. With the default
+% max_tiles_per_row = 5, the default value below produces one row of five
+% neuron panels.
+n_example_neurons = 5;
 
 % Random selection control. The same selected neurons are used for all
 % analysis_fields within the same group.
@@ -135,6 +147,9 @@ if isempty(scriptDir)
 end
 
 analysis_fields = normalizeFieldListLocal(analysis_fields);
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
 
 if isempty(data_condition)
     use_condition_mode = false;
@@ -247,6 +262,7 @@ if isempty(yDims) || any(yDims <= 0)
 end
 
 numGroups = numel(yDims);
+validateGroupNameCountLocal(group_names, numGroups);
 
 fprintf('\nAnalysis fields to plot:\n');
 for f = 1:numel(analysis_fields)
@@ -264,30 +280,35 @@ for groupIdx = 1:numGroups
 
     nSelect = min(n_example_neurons, nAvailable);
     if nSelect < n_example_neurons
-        warning('Group %d only has %d neurons. Plotting all available neurons.', ...
-            groupIdx, nAvailable);
+        warning('%s only has %d neurons. Plotting all available neurons.', ...
+            group_display_names{groupIdx}, nAvailable);
     end
 
     selectedLocalNeuronIds = randperm(nAvailable, nSelect);
     selectedGlobalRows = groupRows(selectedLocalNeuronIds);
 
     fprintf('\n============================================================\n');
-    fprintf('Group %d: selected local neurons %s\n', ...
-        groupIdx, mat2str(selectedLocalNeuronIds));
+    fprintf('%s: selected local neurons %s\n', ...
+        group_display_names{groupIdx}, mat2str(selectedLocalNeuronIds));
 
     allVals = collectValuesForColorLimitLocal( ...
         dataBlocks, analysis_fields, selectedGlobalRows);
 
     climVals = robustColorLimitsLocal(allVals, color_percentiles);
 
-    fprintf('Group %d shared color limit across fields: [%g, %g]\n', ...
-        groupIdx, climVals(1), climVals(2));
+    fprintf('%s shared color limit across fields: [%g, %g]\n', ...
+        group_display_names{groupIdx}, climVals(1), climVals(2));
 
     for f = 1:numel(analysis_fields)
         fieldName = analysis_fields{f};
 
-        figTitle = sprintf('%s_%s_%s_group%d', ...
-            data_content, fieldName, modeTag, groupIdx);
+        figTitle = sprintf('%s | %s | %s | %s', ...
+            data_content, fieldName, modeTag, ...
+            group_display_names{groupIdx});
+
+        figureFileStem = sprintf('%s_%s_%s_%s', ...
+            data_content, fieldName, modeTag, ...
+            group_file_tags{groupIdx});
 
         fig = plotOneGroupOneFieldLocal( ...
             dataBlocks, fieldName, selectedGlobalRows, selectedLocalNeuronIds, ...
@@ -295,7 +316,7 @@ for groupIdx = 1:numGroups
             draw_condition_boxes, draw_condition_separators, colormap_name, ...
             figure_visible, max_tiles_per_row);
 
-        fileBase = sprintf('%s_%dneuron-example', figTitle, nSelect);
+        fileBase = sprintf('%s_%dneuron-example', figureFileStem, nSelect);
         fileBase = sanitizeFileNameLocal(fileBase);
 
         if save_fig
@@ -1055,4 +1076,73 @@ function cleanAxisLocal(ax)
         'TickDir', 'out', ...
         'LineWidth', 1, ...
         'FontSize', 10);
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+    if numel(group_names) ~= numGroups
+        error([ ...
+            'group_names has %d entries, but the current DLAG model ', ...
+            'contains %d groups. The order of group_names must follow ', ...
+            'the model-group order.'], numel(group_names), numGroups);
+    end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+    nGroups = numel(group_names);
+    groupDisplayNames = cell(1, nGroups);
+    groupFileTags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+        groupFileTags{g} = sprintf( ...
+            'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+    end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+    tag = strtrim(char(string(groupName)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
 end

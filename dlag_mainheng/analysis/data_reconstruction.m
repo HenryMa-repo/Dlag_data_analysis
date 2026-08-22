@@ -127,18 +127,24 @@ data_condition = [];
 
 runIdx = 1;
 
+% Display/file labels only. Their order must follow the DLAG model-group
+% order. These names do not affect neuron/latent selection or any
+% reconstruction calculation, and they are not compared with stored group
+% or area names.
+group_names = {'V1', 'MT'};
+
 %% ------------------------------------------------------------------------
 % Reconstruction switches
 % -------------------------------------------------------------------------
 
-add_d_no_d_and_base_reconstruction = false;
+add_d_no_d_and_base_reconstruction = true;
 add_R_noise_reconstruction = false;
 add_keep_resid_reconstruction = false;
 
-add_directional_reconstruction = false;
+add_directional_reconstruction = true;
 
 add_timescale_directional_reconstruction = false;
-add_timescale_within_across_reconstruction = true;
+add_timescale_within_across_reconstruction = false;
 
 % If false, existing seqEst fields will not be overwritten.
 % Empty fields will still be filled.
@@ -180,6 +186,10 @@ else
     numConditions = numel(condition_list);
 end
 
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags] = ...
+    buildGroupLabelsLocal(group_names);
+
 if add_R_noise_reconstruction
     if use_fixed_noise_seed
         rng(noise_seed, 'twister');
@@ -197,6 +207,7 @@ opts.add_timescale_directional_reconstruction = add_timescale_directional_recons
 opts.add_timescale_within_across_reconstruction = add_timescale_within_across_reconstruction;
 opts.overwrite_existing_recon_fields = overwrite_existing_recon_fields;
 opts.timescale_recon_specs = [];
+opts.group_display_names = group_display_names;
 
 %% ------------------------------------------------------------------------
 % Main loop
@@ -247,6 +258,14 @@ for cond_i = 1:numConditions
 
     params = res.estParams;
     params = normalizeParamDimsLocal(params, bestModel);
+
+    validateGroupNameCountLocal(group_names, numel(params.yDims));
+
+    fprintf('Model groups:\n');
+    for g = 1:numel(params.yDims)
+        fprintf('  %s | neurons %d | within latents %d\n', ...
+            group_display_names{g}, params.yDims(g), params.xDim_within(g));
+    end
 
     if ~isfield(seqEst, 'xsm')
         error(['seqEst.xsm not found in %s.\n', ...
@@ -360,7 +379,22 @@ for cond_i = 1:numConditions
 
     recon_R2 = computeReconstructionR2Local(seqEst, params.yDims);
 
+    recon_R2.meta = struct();
+    recon_R2.meta.group_names = group_names;
+    recon_R2.meta.group_display_names = group_display_names;
+    recon_R2.meta.group_file_tags = group_file_tags;
+    recon_R2.meta.yDims = params.yDims;
+    recon_R2.meta.data_content = data_content;
+    recon_R2.meta.data_condition = this_condition;
+    recon_R2.meta.runIdx = runIdx;
+
     Sbest.seqEst = seqEst;
+
+    Sbest.reconstruction_group_info = struct();
+    Sbest.reconstruction_group_info.group_names = group_names;
+    Sbest.reconstruction_group_info.group_display_names = group_display_names;
+    Sbest.reconstruction_group_info.group_file_tags = group_file_tags;
+    Sbest.reconstruction_group_info.yDims = params.yDims;
 
     if needAnyTimescaleRecon || ~isempty(fieldnames(timescale_recon_info))
         Sbest.timescale_recon_info = timescale_recon_info;
@@ -424,7 +458,8 @@ if opts.add_timescale_directional_reconstruction && isempty(latentClass)
 end
 
 blocks = precomputeReconstructionBlocksLocal( ...
-    params, latentClass, opts.add_directional_reconstruction);
+    params, latentClass, opts.add_directional_reconstruction, ...
+    opts.group_display_names);
 
 needTimescaleRecon = ...
     opts.add_timescale_directional_reconstruction || ...
@@ -746,7 +781,8 @@ if overwriteExisting || ~isfield(seqEst, fieldName) || isempty(seqEst(trialIdx).
 end
 end
 
-function blocks = precomputeReconstructionBlocksLocal(params, latentClass, addDirectional)
+function blocks = precomputeReconstructionBlocksLocal( ...
+    params, latentClass, addDirectional, groupDisplayNames)
 
 yDims = params.yDims;
 xDim_across = params.xDim_across;
@@ -877,15 +913,15 @@ for groupIdx = 1:numGroups
         blocks(groupIdx).Q_remove_feedforward_fb_ambiguous = ...
             Q_remove_feedforward_fb_ambiguous;
 
-        fprintf(['  Group %d: xAcross=%d, xWithin=%d, ', ...
+        fprintf(['  %s: xAcross=%d, xWithin=%d, ', ...
             'FF=%d, FB=%d, Ambiguous=%d, ', ...
             'basisFF=%d, basisFB=%d, basisWithin=%d\n'], ...
-            groupIdx, xDim_across, xDim_within(groupIdx), ...
+            groupDisplayNames{groupIdx}, xDim_across, xDim_within(groupIdx), ...
             numel(ffIdx), numel(fbIdx), numel(ambiguousIdx), ...
             size(Q_feedforward, 2), size(Q_feedback, 2), size(Q_within, 2));
     else
-        fprintf('  Group %d: xAcross=%d, xWithin=%d, basisAcross=%d, basisWithin=%d, basisAll=%d\n', ...
-            groupIdx, xDim_across, xDim_within(groupIdx), ...
+        fprintf('  %s: xAcross=%d, xWithin=%d, basisAcross=%d, basisWithin=%d, basisAll=%d\n', ...
+            groupDisplayNames{groupIdx}, xDim_across, xDim_within(groupIdx), ...
             size(Q_across, 2), size(Q_within, 2), size(Q_all, 2));
     end
 end
@@ -2087,5 +2123,78 @@ if isempty(out)
     out = add;
 else
     out = [out, add];
+end
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+if isstring(group_names)
+    group_names = cellstr(group_names(:)');
+elseif ischar(group_names)
+    if size(group_names, 1) == 1
+        group_names = {group_names};
+    else
+        group_names = reshape(cellstr(group_names), 1, []);
+    end
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be text or a cell array of text.');
+end
+
+if isempty(group_names)
+    error('group_names cannot be empty.');
+end
+
+for g = 1:numel(group_names)
+    value = group_names{g};
+
+    if ~(ischar(value) || (isstring(value) && isscalar(value)))
+        error('group_names{%d} must contain text.', g);
+    end
+
+    value = strtrim(char(string(value)));
+
+    if isempty(value)
+        error('group_names{%d} cannot be empty.', g);
+    end
+
+    group_names{g} = value;
+end
+end
+
+function validateGroupNameCountLocal(group_names, numGroups)
+
+if numel(group_names) ~= numGroups
+    error([ ...
+        'group_names has %d entries, but the current DLAG model contains ', ...
+        '%d groups. The order of group_names must follow the model-group ', ...
+        'order.'], numel(group_names), numGroups);
+end
+end
+
+function [groupDisplayNames, groupFileTags] = ...
+        buildGroupLabelsLocal(group_names)
+
+nGroups = numel(group_names);
+groupDisplayNames = cell(1, nGroups);
+groupFileTags = cell(1, nGroups);
+
+for g = 1:nGroups
+    groupDisplayNames{g} = sprintf('Group %d: %s', g, group_names{g});
+    groupFileTags{g} = sprintf( ...
+        'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+end
+end
+
+function tag = makeSafeGroupNameTagLocal(groupName)
+
+tag = strtrim(char(string(groupName)));
+tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+tag = regexprep(tag, '_+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+
+if isempty(tag)
+    tag = 'area';
 end
 end
