@@ -1,10 +1,9 @@
 %% sum_sessions_subspace_principal_angle.m
 % Pool the principal-angle results saved by subspace_similarity_dlag.m.
-% Revision: 2026-08-07c
+% Revision: 2026-08-24b area-label/dynamic-group
 %
-% One figure is made with this x-axis order:
-%   Group 1: Across vs Within, FF vs FB
-%   Group 2: Across vs Within, FF vs FB
+% One figure is made with two comparisons for every saved neural group:
+%   Across vs Within, FF vs FB
 %
 % all_condition_model:
 %   Each session contributes one observation.
@@ -36,6 +35,12 @@ model_mode = 'all_condition_model';
 % 'condition_specific_models'
 
 runIdx = 1;
+
+% Display/file labels only. Their order must follow SubspaceSim.group order.
+% These names do not select data and are not compared with any stored group
+% or area name. Repeated area names are allowed because each output tag also
+% contains its group index, for example: {'V1', 'V2', 'V1'}.
+group_names = {'V1', 'MT'};
 
 % These options must match the options used in subspace_similarity_dlag.m.
 use_dsl_filter = false;
@@ -82,7 +87,9 @@ save_mat = true;
 figure_visible = 'on';
 close_after_save = false;
 
-% Group 1 / Group 2 colors used in the existing analysis programs.
+% The first two rows preserve the original Group 1 / Group 2 colors.
+% If group_names contains additional groups, distinct extra colors are added
+% automatically while these first two rows remain unchanged.
 group_colors = [
     0.0000, 0.4470, 0.7410;
     0.8500, 0.3250, 0.0980
@@ -118,6 +125,12 @@ model_mode = normalizeModelModeLocal(model_mode);
 principal_angle_type = lower(strtrim(char(principal_angle_type)));
 plot_style = lower(strtrim(char(plot_style)));
 
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags, group_mapping_tag] = ...
+    buildGroupLabelsLocal(group_names);
+numGroups = numel(group_names);
+group_colors = ensureColorRowsLocal(group_colors, numGroups);
+
 if ~isfolder(root_dir)
     error('root_dir does not exist: %s', root_dir);
 end
@@ -152,9 +165,6 @@ validateattributes(shared_varexp_threshold, {'numeric'}, ...
     {'scalar', 'real', 'finite', 'nonnegative'}, ...
     mfilename, 'shared_varexp_threshold');
 
-validateattributes(group_colors, {'numeric'}, ...
-    {'size', [2, 3], '>=', 0, '<=', 1}, mfilename, 'group_colors');
-
 if ~(isnumeric(y_limits) && numel(y_limits) == 2 && ...
         all(isfinite(y_limits)) && y_limits(2) > y_limits(1))
     error('y_limits must be a finite increasing two-element vector.');
@@ -182,9 +192,10 @@ else
 end
 
 out_base = sprintf( ...
-    '%s_%s_run%03d_subspace_principal_angle_%s_%s_%s_%s_%s', ...
+    '%s_%s_run%03d_subspace_principal_angle_%s_%s_%s_%s_%s_%s', ...
     data_content, model_tag, runIdx, latentSelectionTag, ...
-    principal_angle_type, plot_style, mean_tag, median_tag);
+    principal_angle_type, plot_style, mean_tag, median_tag, ...
+    group_mapping_tag);
 
 fprintf('Root dir              : %s\n', root_dir);
 fprintf('Model mode            : %s\n', model_mode);
@@ -195,6 +206,7 @@ fprintf('Show mean              : %d\n', show_mean_current);
 fprintf('Show median            : %d\n', show_median_current);
 fprintf('Save figure            : %d\n', save_figure);
 fprintf('Save mat               : %d\n', save_mat);
+fprintf('Group labels           : %s\n', strjoin(group_display_names, ' | '));
 fprintf('Output base            : %s\n', out_base);
 
 %% ======================= FIND SESSION FOLDERS ==========================
@@ -209,41 +221,13 @@ fprintf('Found %d candidate catgt_* session folders.\n', numel(session_dirs));
 
 %% ======================== READ ALL SESSIONS ============================
 
-category_keys = {
-    'group1_across_within', ...
-    'group1_ff_fb', ...
-    'group2_across_within', ...
-    'group2_ff_fb'
-};
+[category_keys, category_labels, category_group, x_positions] = ...
+    buildPrincipalAngleCategoriesLocal( ...
+        numGroups, within_group_spacing, between_group_spacing);
 
-category_labels = {
-    'Across vs Within', ...
-    'FF vs FB', ...
-    'Across vs Within', ...
-    'FF vs FB'
-};
-
-category_group = [1, 1, 2, 2];
-
-x_positions = [
-    1, ...
-    1 + within_group_spacing, ...
-    1 + within_group_spacing + between_group_spacing, ...
-    1 + 2 * within_group_spacing + between_group_spacing
-];
-
-values = nan(0, 4);
-
-records = struct( ...
-    'session_name', {}, ...
-    'session_dir', {}, ...
-    'input_file', {}, ...
-    'condition_id', {}, ...
-    'stim_abbrev', {}, ...
-    'group1_across_within', {}, ...
-    'group1_ff_fb', {}, ...
-    'group2_across_within', {}, ...
-    'group2_ff_fb', {});
+num_categories = numel(category_keys);
+values = nan(0, num_categories);
+records = [];
 
 skipped = struct('session_dir', {}, 'reason', {});
 
@@ -273,34 +257,35 @@ for si = 1:numel(session_dirs)
         end
 
         SubspaceSim = S.SubspaceSim;
-        validateSubspaceSimLocal(SubspaceSim);
+        validateSubspaceSimLocal(SubspaceSim, numGroups);
 
         if strcmp(model_mode, 'all_condition_model')
 
             row_values = readOnePooledModelLocal( ...
-                SubspaceSim, angle_field);
+                SubspaceSim, angle_field, numGroups);
 
             rec = makeRecordLocal( ...
                 session_name, session_dir, input_file, ...
-                NaN, 'all', row_values);
+                NaN, 'all', row_values, category_keys);
 
             values(end + 1, :) = row_values; %#ok<SAGROW>
-            records(end + 1) = rec; %#ok<SAGROW>
+            records = appendRecordLocal(records, rec);
 
         else
 
             [session_values, condition_ids, stim_abbrev] = ...
-                readOneConditionSummaryLocal(SubspaceSim, angle_field);
+                readOneConditionSummaryLocal( ...
+                    SubspaceSim, angle_field, numGroups);
 
             for ci = 1:size(session_values, 1)
 
                 rec = makeRecordLocal( ...
                     session_name, session_dir, input_file, ...
                     condition_ids(ci), stim_abbrev{ci}, ...
-                    session_values(ci, :));
+                    session_values(ci, :), category_keys);
 
                 values(end + 1, :) = session_values(ci, :); %#ok<SAGROW>
-                records(end + 1) = rec; %#ok<SAGROW>
+                records = appendRecordLocal(records, rec);
             end
         end
 
@@ -322,12 +307,12 @@ end
 
 %% ======================== BUILD SUMMARY ================================
 
-values_by_category = cell(1, 4);
-category_mean = nan(1, 4);
-category_median = nan(1, 4);
-category_n = zeros(1, 4);
+values_by_category = cell(1, num_categories);
+category_mean = nan(1, num_categories);
+category_median = nan(1, num_categories);
+category_n = zeros(1, num_categories);
 
-for k = 1:4
+for k = 1:num_categories
     v = values(:, k);
     v = v(isfinite(v));
 
@@ -366,6 +351,12 @@ SubspacePrincipalAngleSummary.meta.show_mean_current = show_mean_current;
 SubspacePrincipalAngleSummary.meta.show_median_current = show_median_current;
 SubspacePrincipalAngleSummary.meta.save_figure = save_figure;
 SubspacePrincipalAngleSummary.meta.save_mat = save_mat;
+SubspacePrincipalAngleSummary.meta.group_names = group_names;
+SubspacePrincipalAngleSummary.meta.group_display_names = group_display_names;
+SubspacePrincipalAngleSummary.meta.group_file_tags = group_file_tags;
+SubspacePrincipalAngleSummary.meta.group_mapping_tag = group_mapping_tag;
+SubspacePrincipalAngleSummary.meta.group_label_source = ...
+    'manual group_names parameter; display/file labels only';
 
 if strcmp(model_mode, 'condition_specific_models')
     SubspacePrincipalAngleSummary.meta.observation_unit = ...
@@ -384,6 +375,9 @@ SubspacePrincipalAngleSummary.category_keys = category_keys;
 SubspacePrincipalAngleSummary.category_labels = category_labels;
 SubspacePrincipalAngleSummary.category_group = category_group;
 SubspacePrincipalAngleSummary.x_positions = x_positions;
+SubspacePrincipalAngleSummary.group_names = group_names;
+SubspacePrincipalAngleSummary.group_display_names = group_display_names;
+SubspacePrincipalAngleSummary.group_file_tags = group_file_tags;
 
 SubspacePrincipalAngleSummary.values = values;
 SubspacePrincipalAngleSummary.values_by_category = values_by_category;
@@ -422,7 +416,7 @@ fig = figure( ...
 ax = axes(fig);
 hold(ax, 'on');
 
-for k = 1:4
+for k = 1:num_categories
 
     x = x_positions(k);
     g = category_group(k);
@@ -502,10 +496,10 @@ for k = 1:4
     end
 end
 
-% Legend shows Group 1 and Group 2 colors only.
-legend_handles = gobjects(2, 1);
+% Legend identifies every group with the manual display/area label.
+legend_handles = gobjects(numGroups, 1);
 
-for g = 1:2
+for g = 1:numGroups
     legend_handles(g) = plot(ax, nan, nan, 'o', ...
         'MarkerSize', 6, ...
         'MarkerFaceColor', group_colors(g, :), ...
@@ -519,7 +513,7 @@ else
     legend_location = other_plot_legend_location;
 end
 
-legend(ax, legend_handles, {'Group 1', 'Group 2'}, ...
+legend(ax, legend_handles, group_display_names, ...
     'Location', legend_location, ...
     'Box', 'off', ...
     'FontName', 'Arial', ...
@@ -731,41 +725,41 @@ function input_file = makeInputFileLocal( ...
     end
 end
 
-function validateSubspaceSimLocal(SubspaceSim)
+function validateSubspaceSimLocal(SubspaceSim, numGroups)
 
     if ~isstruct(SubspaceSim) || ~isfield(SubspaceSim, 'group')
         error('SubspaceSim must be a struct containing group.');
     end
 
-    if numel(SubspaceSim.group) < 2
-        error('SubspaceSim.group must contain at least two groups.');
+    if numel(SubspaceSim.group) ~= numGroups
+        error(['SubspaceSim contains %d groups, but group_names contains %d ' ...
+               'entries. group_names must follow the saved group order.'], ...
+              numel(SubspaceSim.group), numGroups);
     end
 
     required_pairs = {'across_vs_within', 'feedforward_vs_feedback'};
 
-    for g = 1:2
+    for g = 1:numGroups
         for p = 1:numel(required_pairs)
             getPairByNameLocal(SubspaceSim, g, required_pairs{p});
         end
     end
 end
 
-function row_values = readOnePooledModelLocal(SubspaceSim, angle_field)
+function row_values = readOnePooledModelLocal( ...
+        SubspaceSim, angle_field, numGroups)
 
-    row_values = [ ...
-        getScalarAngleLocal( ...
-            SubspaceSim, 1, 'across_vs_within', angle_field), ...
-        getScalarAngleLocal( ...
-            SubspaceSim, 1, 'feedforward_vs_feedback', angle_field), ...
-        getScalarAngleLocal( ...
-            SubspaceSim, 2, 'across_vs_within', angle_field), ...
-        getScalarAngleLocal( ...
-            SubspaceSim, 2, 'feedforward_vs_feedback', angle_field) ...
-    ];
+    pair_specs = principalAngleSpecsLocal(numGroups);
+    row_values = nan(1, size(pair_specs, 1));
+
+    for k = 1:size(pair_specs, 1)
+        row_values(k) = getScalarAngleLocal( ...
+            SubspaceSim, pair_specs{k, 1}, pair_specs{k, 2}, angle_field);
+    end
 end
 
 function [values, condition_ids, stim_abbrev] = ...
-        readOneConditionSummaryLocal(SubspaceSim, angle_field)
+        readOneConditionSummaryLocal(SubspaceSim, angle_field, numGroups)
 
     ref_pair = getPairByNameLocal( ...
         SubspaceSim, 1, 'across_vs_within');
@@ -787,16 +781,10 @@ function [values, condition_ids, stim_abbrev] = ...
         error('condition_id and stim_abbrev have different lengths.');
     end
 
-    values = nan(nCond, 4);
+    pair_specs = principalAngleSpecsLocal(numGroups);
+    values = nan(nCond, size(pair_specs, 1));
 
-    pair_specs = {
-        1, 'across_vs_within';
-        1, 'feedforward_vs_feedback';
-        2, 'across_vs_within';
-        2, 'feedforward_vs_feedback'
-    };
-
-    for k = 1:4
+    for k = 1:size(pair_specs, 1)
         g = pair_specs{k, 1};
         pair_name = pair_specs{k, 2};
         pair_result = getPairByNameLocal(SubspaceSim, g, pair_name);
@@ -816,6 +804,20 @@ function [values, condition_ids, stim_abbrev] = ...
         end
 
         values(:, k) = v;
+    end
+end
+
+function specs = principalAngleSpecsLocal(numGroups)
+
+    specs = cell(numGroups * 2, 2);
+    row = 0;
+
+    for g = 1:numGroups
+        row = row + 1;
+        specs(row, :) = {g, 'across_vs_within'};
+
+        row = row + 1;
+        specs(row, :) = {g, 'feedforward_vs_feedback'};
     end
 end
 
@@ -908,7 +910,7 @@ end
 
 function rec = makeRecordLocal( ...
         session_name, session_dir, input_file, ...
-        condition_id, stim_abbrev, row_values)
+        condition_id, stim_abbrev, row_values, category_keys)
 
     rec = struct();
     rec.session_name = session_name;
@@ -916,10 +918,26 @@ function rec = makeRecordLocal( ...
     rec.input_file = input_file;
     rec.condition_id = condition_id;
     rec.stim_abbrev = stim_abbrev;
-    rec.group1_across_within = row_values(1);
-    rec.group1_ff_fb = row_values(2);
-    rec.group2_across_within = row_values(3);
-    rec.group2_ff_fb = row_values(4);
+
+    if numel(row_values) ~= numel(category_keys)
+        error('Record value count does not match category_keys.');
+    end
+
+    for k = 1:numel(category_keys)
+        rec.(category_keys{k}) = row_values(k);
+    end
+end
+
+function records = appendRecordLocal(records, rec)
+
+    % struct([]) has no fields and cannot accept a populated struct through
+    % subscripted assignment. Establish the structure array from the first
+    % valid record, then append subsequent records normally.
+    if isempty(records)
+        records = rec;
+    else
+        records(end + 1) = rec; %#ok<AGROW>
+    end
 end
 
 function drawPointsLocal( ...
@@ -998,4 +1016,118 @@ function [density, y_grid] = estimateDensityLocal(values, y_limits)
 
     density = reshape(density, 1, []);
     y_grid = reshape(y_grid, 1, []);
+end
+
+function [category_keys, category_labels, category_group, x_positions] = ...
+        buildPrincipalAngleCategoriesLocal( ...
+        numGroups, within_group_spacing, between_group_spacing)
+
+    comparisons_per_group = 2;
+    num_categories = numGroups * comparisons_per_group;
+
+    category_keys = cell(1, num_categories);
+    category_labels = cell(1, num_categories);
+    category_group = zeros(1, num_categories);
+    x_positions = nan(1, num_categories);
+
+    for g = 1:numGroups
+        idx = (g - 1) * comparisons_per_group + (1:comparisons_per_group);
+
+        category_keys{idx(1)} = sprintf('group%d_across_within', g);
+        category_keys{idx(2)} = sprintf('group%d_ff_fb', g);
+
+        category_labels(idx) = {'Across vs Within', 'FF vs FB'};
+        category_group(idx) = g;
+
+        group_start = 1 + (g - 1) * ( ...
+            (comparisons_per_group - 1) * within_group_spacing + ...
+            between_group_spacing);
+
+        x_positions(idx) = group_start + ...
+            (0:(comparisons_per_group - 1)) * within_group_spacing;
+    end
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function [group_display_names, group_file_tags, group_mapping_tag] = ...
+        buildGroupLabelsLocal(group_names)
+
+    nGroups = numel(group_names);
+    group_display_names = cell(1, nGroups);
+    group_file_tags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        group_display_names{g} = sprintf( ...
+            'Group %d: %s', g, group_names{g});
+        group_file_tags{g} = sprintf( ...
+            'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+    end
+
+    group_mapping_tag = strjoin(group_file_tags, '_');
+end
+
+function tag = makeSafeGroupNameTagLocal(group_name)
+
+    tag = strtrim(char(string(group_name)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
+end
+
+function colors = ensureColorRowsLocal(colors, nRows)
+
+    if ~isempty(colors) && (size(colors, 2) ~= 3 || ...
+            any(~isfinite(colors(:))) || any(colors(:) < 0) || ...
+            any(colors(:) > 1))
+        error('group_colors must be a finite N-by-3 RGB matrix in [0, 1].');
+    end
+
+    fallback = lines(nRows);
+    nProvided = min(size(colors, 1), nRows);
+
+    if nProvided > 0
+        fallback(1:nProvided, :) = colors(1:nProvided, :);
+    end
+
+    colors = fallback;
 end

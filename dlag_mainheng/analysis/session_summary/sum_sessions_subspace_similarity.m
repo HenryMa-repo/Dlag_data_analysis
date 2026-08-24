@@ -1,12 +1,12 @@
 %% sum_sessions_subspace_similarity.m
 % Pool the directional subspace-similarity results saved by
 % subspace_similarity_dlag.m.
-% Revision: 2026-08-07a
+% Revision: 2026-08-24b area-label/dynamic-group
 %
-% One figure is made with this x-axis order:
-%   Group 1: Across captures Within, Within captures Across,
-%            Feedforward captures Feedback, Feedback captures Feedforward
-%   Group 2: the same four directional comparisons
+% One figure is made with four directional comparisons for every saved
+% neural group:
+%   Across captures Within, Within captures Across,
+%   Feedforward captures Feedback, Feedback captures Feedforward
 %
 % all_condition_model:
 %   Each session contributes one observation.
@@ -38,6 +38,12 @@ model_mode = 'all_condition_model';
 % 'condition_specific_models'
 
 runIdx = 1;
+
+% Display/file labels only. Their order must follow SubspaceSim.group order.
+% These names do not select data and are not compared with any stored group
+% or area name. Repeated area names are allowed because each output tag also
+% contains its group index, for example: {'V1', 'V2', 'V1'}.
+group_names = {'V1', 'MT'};
 
 % These options must match the options used in subspace_similarity_dlag.m.
 use_dsl_filter = false;
@@ -80,7 +86,9 @@ save_mat = true;
 figure_visible = 'on';
 close_after_save = false;
 
-% Group 1 / Group 2 colors used in the existing analysis programs.
+% The first two rows preserve the original Group 1 / Group 2 colors.
+% If group_names contains additional groups, distinct extra colors are added
+% automatically while these first two rows remain unchanged.
 group_colors = [
     0.0000, 0.4470, 0.7410;
     0.8500, 0.3250, 0.0980
@@ -115,6 +123,12 @@ other_plot_legend_location = 'best';
 model_mode = normalizeModelModeLocal(model_mode);
 plot_style = lower(strtrim(char(plot_style)));
 
+group_names = normalizeGroupNamesLocal(group_names);
+[group_display_names, group_file_tags, group_mapping_tag] = ...
+    buildGroupLabelsLocal(group_names);
+numGroups = numel(group_names);
+group_colors = ensureColorRowsLocal(group_colors, numGroups);
+
 if ~isfolder(root_dir)
     error('root_dir does not exist: %s', root_dir);
 end
@@ -145,9 +159,6 @@ validateattributes(shared_varexp_threshold, {'numeric'}, ...
     {'scalar', 'real', 'finite', 'nonnegative'}, ...
     mfilename, 'shared_varexp_threshold');
 
-validateattributes(group_colors, {'numeric'}, ...
-    {'size', [2, 3], '>=', 0, '<=', 1}, mfilename, 'group_colors');
-
 if ~(isnumeric(y_limits) && numel(y_limits) == 2 && ...
         all(isfinite(y_limits)) && y_limits(2) > y_limits(1))
     error('y_limits must be a finite increasing two-element vector.');
@@ -173,9 +184,9 @@ else
 end
 
 out_base = sprintf( ...
-    '%s_%s_run%03d_subspace_similarity_%s_%s_%s_%s', ...
+    '%s_%s_run%03d_subspace_similarity_%s_%s_%s_%s_%s', ...
     data_content, model_tag, runIdx, latentSelectionTag, ...
-    plot_style, mean_tag, median_tag);
+    plot_style, mean_tag, median_tag, group_mapping_tag);
 
 fprintf('Root dir              : %s\n', root_dir);
 fprintf('Model mode            : %s\n', model_mode);
@@ -185,6 +196,7 @@ fprintf('Show mean              : %d\n', show_mean_current);
 fprintf('Show median            : %d\n', show_median_current);
 fprintf('Save figure            : %d\n', save_figure);
 fprintf('Save mat               : %d\n', save_mat);
+fprintf('Group labels           : %s\n', strjoin(group_display_names, ' | '));
 fprintf('Output base            : %s\n', out_base);
 
 %% ======================= FIND SESSION FOLDERS ==========================
@@ -199,58 +211,14 @@ fprintf('Found %d candidate catgt_* session folders.\n', numel(session_dirs));
 
 %% ======================== READ ALL SESSIONS ============================
 
-category_keys = {
-    'group1_across_captures_within', ...
-    'group1_within_captures_across', ...
-    'group1_feedforward_captures_feedback', ...
-    'group1_feedback_captures_feedforward', ...
-    'group2_across_captures_within', ...
-    'group2_within_captures_across', ...
-    'group2_feedforward_captures_feedback', ...
-    'group2_feedback_captures_feedforward'
-};
-
-category_labels = {
-    'Across captures Within', ...
-    'Within captures Across', ...
-    'FF captures FB', ...
-    'FB captures FF', ...
-    'Across captures Within', ...
-    'Within captures Across', ...
-    'FF captures FB', ...
-    'FB captures FF'
-};
-
-category_group = [1, 1, 1, 1, 2, 2, 2, 2];
-
-x_positions = [
-    1, ...
-    1 + within_group_spacing, ...
-    1 + 2 * within_group_spacing, ...
-    1 + 3 * within_group_spacing, ...
-    1 + 3 * within_group_spacing + between_group_spacing, ...
-    1 + 4 * within_group_spacing + between_group_spacing, ...
-    1 + 5 * within_group_spacing + between_group_spacing, ...
-    1 + 6 * within_group_spacing + between_group_spacing
-];
+[category_keys, category_labels, category_group, x_positions] = ...
+    buildSimilarityCategoriesLocal( ...
+        numGroups, within_group_spacing, between_group_spacing);
 
 num_categories = numel(category_keys);
 values = nan(0, num_categories);
 
-records = struct( ...
-    'session_name', {}, ...
-    'session_dir', {}, ...
-    'input_file', {}, ...
-    'condition_id', {}, ...
-    'stim_abbrev', {}, ...
-    'group1_across_captures_within', {}, ...
-    'group1_within_captures_across', {}, ...
-    'group1_feedforward_captures_feedback', {}, ...
-    'group1_feedback_captures_feedforward', {}, ...
-    'group2_across_captures_within', {}, ...
-    'group2_within_captures_across', {}, ...
-    'group2_feedforward_captures_feedback', {}, ...
-    'group2_feedback_captures_feedforward', {});
+records = [];
 
 skipped = struct('session_dir', {}, 'reason', {});
 
@@ -280,33 +248,33 @@ for si = 1:numel(session_dirs)
         end
 
         SubspaceSim = S.SubspaceSim;
-        validateSubspaceSimLocal(SubspaceSim);
+        validateSubspaceSimLocal(SubspaceSim, numGroups);
 
         if strcmp(model_mode, 'all_condition_model')
 
-            row_values = readOnePooledModelLocal(SubspaceSim);
+            row_values = readOnePooledModelLocal(SubspaceSim, numGroups);
 
             rec = makeRecordLocal( ...
                 session_name, session_dir, input_file, ...
-                NaN, 'all', row_values);
+                NaN, 'all', row_values, category_keys);
 
             values(end + 1, :) = row_values; %#ok<SAGROW>
-            records(end + 1) = rec; %#ok<SAGROW>
+            records = appendRecordLocal(records, rec);
 
         else
 
             [session_values, condition_ids, stim_abbrev] = ...
-                readOneConditionSummaryLocal(SubspaceSim);
+                readOneConditionSummaryLocal(SubspaceSim, numGroups);
 
             for ci = 1:size(session_values, 1)
 
                 rec = makeRecordLocal( ...
                     session_name, session_dir, input_file, ...
                     condition_ids(ci), stim_abbrev{ci}, ...
-                    session_values(ci, :));
+                    session_values(ci, :), category_keys);
 
                 values(end + 1, :) = session_values(ci, :); %#ok<SAGROW>
-                records(end + 1) = rec; %#ok<SAGROW>
+                records = appendRecordLocal(records, rec);
             end
         end
 
@@ -369,6 +337,12 @@ SubspaceSimilaritySummary.meta.show_mean_current = show_mean_current;
 SubspaceSimilaritySummary.meta.show_median_current = show_median_current;
 SubspaceSimilaritySummary.meta.save_figure = save_figure;
 SubspaceSimilaritySummary.meta.save_mat = save_mat;
+SubspaceSimilaritySummary.meta.group_names = group_names;
+SubspaceSimilaritySummary.meta.group_display_names = group_display_names;
+SubspaceSimilaritySummary.meta.group_file_tags = group_file_tags;
+SubspaceSimilaritySummary.meta.group_mapping_tag = group_mapping_tag;
+SubspaceSimilaritySummary.meta.group_label_source = ...
+    'manual group_names parameter; display/file labels only';
 
 if strcmp(model_mode, 'condition_specific_models')
     SubspaceSimilaritySummary.meta.observation_unit = ...
@@ -387,6 +361,9 @@ SubspaceSimilaritySummary.category_keys = category_keys;
 SubspaceSimilaritySummary.category_labels = category_labels;
 SubspaceSimilaritySummary.category_group = category_group;
 SubspaceSimilaritySummary.x_positions = x_positions;
+SubspaceSimilaritySummary.group_names = group_names;
+SubspaceSimilaritySummary.group_display_names = group_display_names;
+SubspaceSimilaritySummary.group_file_tags = group_file_tags;
 
 SubspaceSimilaritySummary.values = values;
 SubspaceSimilaritySummary.values_by_category = values_by_category;
@@ -505,10 +482,10 @@ for k = 1:num_categories
     end
 end
 
-% Legend shows Group 1 and Group 2 colors only.
-legend_handles = gobjects(2, 1);
+% Legend identifies every group with the manual display/area label.
+legend_handles = gobjects(numGroups, 1);
 
-for g = 1:2
+for g = 1:numGroups
     legend_handles(g) = plot(ax, nan, nan, 'o', ...
         'MarkerSize', 6, ...
         'MarkerFaceColor', group_colors(g, :), ...
@@ -522,7 +499,7 @@ else
     legend_location = other_plot_legend_location;
 end
 
-legend(ax, legend_handles, {'Group 1', 'Group 2'}, ...
+legend(ax, legend_handles, group_display_names, ...
     'Location', legend_location, ...
     'Box', 'off', ...
     'FontName', 'Arial', ...
@@ -734,28 +711,30 @@ function input_file = makeInputFileLocal( ...
     end
 end
 
-function validateSubspaceSimLocal(SubspaceSim)
+function validateSubspaceSimLocal(SubspaceSim, numGroups)
 
     if ~isstruct(SubspaceSim) || ~isfield(SubspaceSim, 'group')
         error('SubspaceSim must be a struct containing group.');
     end
 
-    if numel(SubspaceSim.group) < 2
-        error('SubspaceSim.group must contain at least two groups.');
+    if numel(SubspaceSim.group) ~= numGroups
+        error(['SubspaceSim contains %d groups, but group_names contains %d ' ...
+               'entries. group_names must follow the saved group order.'], ...
+              numel(SubspaceSim.group), numGroups);
     end
 
     required_pairs = {'across_vs_within', 'feedforward_vs_feedback'};
 
-    for g = 1:2
+    for g = 1:numGroups
         for p = 1:numel(required_pairs)
             getPairByNameLocal(SubspaceSim, g, required_pairs{p});
         end
     end
 end
 
-function row_values = readOnePooledModelLocal(SubspaceSim)
+function row_values = readOnePooledModelLocal(SubspaceSim, numGroups)
 
-    specs = similaritySpecsLocal();
+    specs = similaritySpecsLocal(numGroups);
     row_values = nan(1, size(specs, 1));
 
     for k = 1:size(specs, 1)
@@ -765,7 +744,7 @@ function row_values = readOnePooledModelLocal(SubspaceSim)
 end
 
 function [values, condition_ids, stim_abbrev] = ...
-        readOneConditionSummaryLocal(SubspaceSim)
+        readOneConditionSummaryLocal(SubspaceSim, numGroups)
 
     ref_pair = getPairByNameLocal( ...
         SubspaceSim, 1, 'across_vs_within');
@@ -787,7 +766,7 @@ function [values, condition_ids, stim_abbrev] = ...
         error('condition_id and stim_abbrev have different lengths.');
     end
 
-    specs = similaritySpecsLocal();
+    specs = similaritySpecsLocal(numGroups);
     values = nan(nCond, size(specs, 1));
 
     for k = 1:size(specs, 1)
@@ -843,26 +822,28 @@ function value = getScalarSimilarityLocal( ...
     value = double(value);
 end
 
-function specs = similaritySpecsLocal()
+function specs = similaritySpecsLocal(numGroups)
 
-    specs = {
-        1, 'across_vs_within', ...
-           'across_captures_within';
-        1, 'across_vs_within', ...
-           'within_captures_across';
-        1, 'feedforward_vs_feedback', ...
-           'feedforward_captures_feedback';
-        1, 'feedforward_vs_feedback', ...
-           'feedback_captures_feedforward';
-        2, 'across_vs_within', ...
-           'across_captures_within';
-        2, 'across_vs_within', ...
-           'within_captures_across';
-        2, 'feedforward_vs_feedback', ...
-           'feedforward_captures_feedback';
-        2, 'feedforward_vs_feedback', ...
-           'feedback_captures_feedforward'
-    };
+    specs = cell(numGroups * 4, 3);
+    row = 0;
+
+    for g = 1:numGroups
+        row = row + 1;
+        specs(row, :) = {g, 'across_vs_within', ...
+            'across_captures_within'};
+
+        row = row + 1;
+        specs(row, :) = {g, 'across_vs_within', ...
+            'within_captures_across'};
+
+        row = row + 1;
+        specs(row, :) = {g, 'feedforward_vs_feedback', ...
+            'feedforward_captures_feedback'};
+
+        row = row + 1;
+        specs(row, :) = {g, 'feedforward_vs_feedback', ...
+            'feedback_captures_feedforward'};
+    end
 end
 
 function pair_result = getPairByNameLocal( ...
@@ -932,7 +913,7 @@ end
 
 function rec = makeRecordLocal( ...
         session_name, session_dir, input_file, ...
-        condition_id, stim_abbrev, row_values)
+        condition_id, stim_abbrev, row_values, category_keys)
 
     rec = struct();
     rec.session_name = session_name;
@@ -940,14 +921,26 @@ function rec = makeRecordLocal( ...
     rec.input_file = input_file;
     rec.condition_id = condition_id;
     rec.stim_abbrev = stim_abbrev;
-    rec.group1_across_captures_within = row_values(1);
-    rec.group1_within_captures_across = row_values(2);
-    rec.group1_feedforward_captures_feedback = row_values(3);
-    rec.group1_feedback_captures_feedforward = row_values(4);
-    rec.group2_across_captures_within = row_values(5);
-    rec.group2_within_captures_across = row_values(6);
-    rec.group2_feedforward_captures_feedback = row_values(7);
-    rec.group2_feedback_captures_feedforward = row_values(8);
+
+    if numel(row_values) ~= numel(category_keys)
+        error('Record value count does not match category_keys.');
+    end
+
+    for k = 1:numel(category_keys)
+        rec.(category_keys{k}) = row_values(k);
+    end
+end
+
+function records = appendRecordLocal(records, rec)
+
+    % struct([]) has no fields and cannot accept a populated struct through
+    % subscripted assignment. Establish the structure array from the first
+    % valid record, then append subsequent records normally.
+    if isempty(records)
+        records = rec;
+    else
+        records(end + 1) = rec; %#ok<AGROW>
+    end
 end
 
 function drawPointsLocal( ...
@@ -1026,4 +1019,130 @@ function [density, y_grid] = estimateDensityLocal(values, y_limits)
 
     density = reshape(density, 1, []);
     y_grid = reshape(y_grid, 1, []);
+end
+
+function [category_keys, category_labels, category_group, x_positions] = ...
+        buildSimilarityCategoriesLocal( ...
+        numGroups, within_group_spacing, between_group_spacing)
+
+    comparisons_per_group = 4;
+    num_categories = numGroups * comparisons_per_group;
+
+    category_keys = cell(1, num_categories);
+    category_labels = cell(1, num_categories);
+    category_group = zeros(1, num_categories);
+    x_positions = nan(1, num_categories);
+
+    labels_one_group = { ...
+        'Across captures Within', ...
+        'Within captures Across', ...
+        'FF captures FB', ...
+        'FB captures FF'};
+
+    for g = 1:numGroups
+        idx = (g - 1) * comparisons_per_group + (1:comparisons_per_group);
+
+        category_keys{idx(1)} = sprintf( ...
+            'group%d_across_captures_within', g);
+        category_keys{idx(2)} = sprintf( ...
+            'group%d_within_captures_across', g);
+        category_keys{idx(3)} = sprintf( ...
+            'group%d_feedforward_captures_feedback', g);
+        category_keys{idx(4)} = sprintf( ...
+            'group%d_feedback_captures_feedforward', g);
+
+        category_labels(idx) = labels_one_group;
+        category_group(idx) = g;
+
+        group_start = 1 + (g - 1) * ( ...
+            (comparisons_per_group - 1) * within_group_spacing + ...
+            between_group_spacing);
+
+        x_positions(idx) = group_start + ...
+            (0:(comparisons_per_group - 1)) * within_group_spacing;
+    end
+end
+
+function group_names = normalizeGroupNamesLocal(group_names)
+
+    if isstring(group_names)
+        group_names = cellstr(group_names(:)');
+    elseif ischar(group_names)
+        if size(group_names, 1) == 1
+            group_names = {group_names};
+        else
+            group_names = reshape(cellstr(group_names), 1, []);
+        end
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be text or a cell array of text.');
+    end
+
+    if isempty(group_names)
+        error('group_names cannot be empty.');
+    end
+
+    for g = 1:numel(group_names)
+        value = group_names{g};
+
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('group_names{%d} must contain text.', g);
+        end
+
+        value = strtrim(char(string(value)));
+
+        if isempty(value)
+            error('group_names{%d} cannot be empty.', g);
+        end
+
+        group_names{g} = value;
+    end
+end
+
+function [group_display_names, group_file_tags, group_mapping_tag] = ...
+        buildGroupLabelsLocal(group_names)
+
+    nGroups = numel(group_names);
+    group_display_names = cell(1, nGroups);
+    group_file_tags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        group_display_names{g} = sprintf( ...
+            'Group %d: %s', g, group_names{g});
+        group_file_tags{g} = sprintf( ...
+            'G%02d_%s', g, makeSafeGroupNameTagLocal(group_names{g}));
+    end
+
+    group_mapping_tag = strjoin(group_file_tags, '_');
+end
+
+function tag = makeSafeGroupNameTagLocal(group_name)
+
+    tag = strtrim(char(string(group_name)));
+    tag = regexprep(tag, '[^A-Za-z0-9_-]+', '_');
+    tag = regexprep(tag, '_+', '_');
+    tag = regexprep(tag, '^_+|_+$', '');
+
+    if isempty(tag)
+        tag = 'area';
+    end
+end
+
+function colors = ensureColorRowsLocal(colors, nRows)
+
+    if ~isempty(colors) && (size(colors, 2) ~= 3 || ...
+            any(~isfinite(colors(:))) || any(colors(:) < 0) || ...
+            any(colors(:) > 1))
+        error('group_colors must be a finite N-by-3 RGB matrix in [0, 1].');
+    end
+
+    fallback = lines(nRows);
+    nProvided = min(size(colors, 1), nRows);
+
+    if nProvided > 0
+        fallback(1:nProvided, :) = colors(1:nProvided, :);
+    end
+
+    colors = fallback;
 end
