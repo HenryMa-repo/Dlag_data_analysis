@@ -24,7 +24,8 @@
 % - nbin is read from seqEst(1).T.
 % - User parameters analysis_window and sliding_step are also in seconds.
 % - If the window covers the full trial and only one window is generated,
-%   filenames are exactly the old filenames, with no window tag.
+%   filenames have no time-window tag, but still contain the manual
+%   group-area mapping tag (for example, G01_V1_G02_MT).
 % - If multiple windows are generated, filenames get:
 %       _wn0_02_st0_02_w01
 %       _wn0_02_st0_02_w02
@@ -104,7 +105,7 @@ runIdx = 1;
 %
 % If analysis_window = nbin * binsize and only one window is generated,
 % filenames are kept exactly the same as the old static version.
-analysis_window = 0.2;
+analysis_window = 0.4;
 sliding_step    = 0.2;
 
 % Fields to analyze from seqEst.
@@ -150,33 +151,36 @@ sliding_step    = 0.2;
 %   yRecon_use_all_keep_resid
 %   yRecon_across_excl_within_keep_resid
 %   yRecon_within_excl_across_keep_resid
+% 
+% Also adapted to timescale output, like:
+% 'yRecon_use_across_model_ts_v0_v120',...
+% 'yRecon_use_across_model_ts_v120_v300',...
+% 'yRecon_use_across_model_ts_v300_inf',...
+% 'yRecon_use_within_model_ts_v0_v120',...
+% 'yRecon_use_within_model_ts_v120_v300',...
+% 'yRecon_use_within_model_ts_v300_inf'
 
 analysis_fields = { ...
     'y', ...
     'yRecon_use_across', ...
     'yRecon_use_within', ...
     'yRecon_use_all', ...
-    'yRecon_across_excl_within', ...
-    'yRecon_within_excl_across',...
     'yRecon_use_feedback',...
-    'yRecon_feedback_excl_within_ff_ambiguous',...
-    'yRecon_feedback_excl_within',...
-    'yRecon_feedback_excl_ff_ambiguous',...
-    'yRecon_use_feedforward',...
-    'yRecon_feedforward_excl_within_fb_ambiguous',...
-    'yRecon_feedforward_excl_within',...
-    'yRecon_feedforward_excl_fb_ambiguous'};
+    'yRecon_use_feedforward'};
 
 dat_file = './model_data_allruns.mat';
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
-group_names = {};
+% Manual display/file labels for the model groups, in groupd order.
+% These names never select neurons and are never checked against this_run.
+% Repeated area names are allowed because filenames also contain G01, G02, ...
+group_names = {'V1', 'MT'};
 
 % Save options.
 save_fig = true;
 save_png = true;
-save_matlab_fig = true;
+save_matlab_fig = false;
 save_result_mat = true;
 
 % Plot options.
@@ -362,6 +366,9 @@ field_cache = initialize_field_cache(analysis_fields);
 groupd = [];
 nGroups = [];
 group_names_this = {};
+group_display_names = {};
+group_file_tags = {};
+group_mapping_file_tag = '';
 group_row_ranges = {};
 output_dir = '';
 
@@ -425,7 +432,9 @@ if ~use_condition_specific_models
             end
 
             nGroups = numel(groupd);
-            group_names_this = normalize_group_names(group_names, nGroups, this_run);
+            group_names_this = normalize_group_names(group_names, nGroups);
+            [group_display_names, group_file_tags, group_mapping_file_tag] = ...
+                build_group_labels_local(group_names_this);
             [~, ~, group_row_ranges] = build_group_index(groupd);
         else
             if nUnits_this ~= sum(groupd)
@@ -513,7 +522,9 @@ else
                 end
 
                 nGroups = numel(groupd);
-                group_names_this = normalize_group_names(group_names, nGroups, this_run);
+                group_names_this = normalize_group_names(group_names, nGroups);
+                [group_display_names, group_file_tags, group_mapping_file_tag] = ...
+                    build_group_labels_local(group_names_this);
                 [~, ~, group_row_ranges] = build_group_index(groupd);
             else
                 if nUnits_this ~= sum(groupd)
@@ -619,17 +630,17 @@ for analysisFieldIdx = 1:nAnalysisFields
         window_suffix = time_window_info.file_suffix{windowIdx};
         window_label = time_window_info.label{windowIdx};
 
-        size_effect_base_name = sprintf('%s_%s_size_effect_%s%s%s', ...
+        size_effect_base_name = sprintf('%s_%s_size_effect_%s%s_%s%s', ...
             safe_data_content, model_mode, safe_field, ...
-            contrast_filter.file_suffix, window_suffix);
+            contrast_filter.file_suffix, group_mapping_file_tag, window_suffix);
 
-        svsl_fullrange_base_name = sprintf('%s_%s_svsl_%s_fullrange%s%s', ...
+        svsl_fullrange_base_name = sprintf('%s_%s_svsl_%s_fullrange%s_%s%s', ...
             safe_data_content, model_mode, safe_field, ...
-            contrast_filter.file_suffix, window_suffix);
+            contrast_filter.file_suffix, group_mapping_file_tag, window_suffix);
 
-        svsl_brokenaxis_base_name = sprintf('%s_%s_svsl_%s_brokenaxis%s%s', ...
+        svsl_brokenaxis_base_name = sprintf('%s_%s_svsl_%s_brokenaxis%s_%s%s', ...
             safe_data_content, model_mode, safe_field, ...
-            contrast_filter.file_suffix, window_suffix);
+            contrast_filter.file_suffix, group_mapping_file_tag, window_suffix);
 
         fprintf('\n------------------------------------------------------------\n');
         fprintf('Time window %d/%d: %s\n', ...
@@ -791,6 +802,10 @@ for analysisFieldIdx = 1:nAnalysisFields
         size_effect_result.nTimeBins = nTimeBins;
         size_effect_result.groupd = groupd;
         size_effect_result.group_names = group_names_this;
+        size_effect_result.group_display_names = group_display_names;
+        size_effect_result.group_file_tags = group_file_tags;
+        size_effect_result.group_mapping_file_tag = group_mapping_file_tag;
+        size_effect_result.group_label_source = 'manual group_names parameter';
         size_effect_result.model_source = model_source;
 
         size_effect_result.metric_formulas.classic_SI = '(S - L) ./ S';
@@ -823,6 +838,8 @@ for analysisFieldIdx = 1:nAnalysisFields
             rows = group_row_ranges{g};
 
             size_effect_result.group(g).group_name = group_names_this{g};
+            size_effect_result.group(g).group_display_name = group_display_names{g};
+            size_effect_result.group(g).group_file_tag = group_file_tags{g};
             size_effect_result.group(g).group_index = g;
             size_effect_result.group(g).nUnits = numel(rows);
 
@@ -853,7 +870,7 @@ for analysisFieldIdx = 1:nAnalysisFields
                 'Position', fig_position);
 
             plot_size_effect_groups_fullrange( ...
-                S_response, L_response, groupd, ...
+                S_response, L_response, groupd, group_display_names, ...
                 small_size, large_size, stim_tag, analysis_field, model_mode, ...
                 window_label, ...
                 marker_size, marker_face_alpha, marker_edge_alpha);
@@ -873,7 +890,7 @@ for analysisFieldIdx = 1:nAnalysisFields
                 'Position', fig_position);
 
             plot_size_effect_groups_clean_brokenaxis( ...
-                S_response, L_response, groupd, ...
+                S_response, L_response, groupd, group_display_names, ...
                 small_size, large_size, stim_tag, analysis_field, model_mode, ...
                 window_label, ...
                 marker_size, marker_face_alpha, marker_edge_alpha, ...
@@ -895,7 +912,7 @@ for analysisFieldIdx = 1:nAnalysisFields
                 'Position', fig_position);
 
             plot_metric_histograms_by_group( ...
-                effect, valid_effect_mask, groupd, ...
+                effect, valid_effect_mask, groupd, group_display_names, ...
                 stim_tag, analysis_field, model_mode, window_label);
 
             if save_fig
@@ -1297,7 +1314,8 @@ fprintf('  sliding_step    = %.12g s = %d bins\n', ...
 fprintf('  nWindows        = %d\n', time_window_info.nWindows);
 
 if time_window_info.is_full_trial_single_window
-    fprintf('  Full-trial single window detected: old filenames will be used.\n');
+    fprintf(['  Full-trial single window detected: no time-window suffix ', ...
+        'will be added.\n']);
 else
     fprintf('  Filename parameter tag: %s\n', time_window_info.parameter_file_tag);
 end
@@ -1453,55 +1471,71 @@ else
     elseif isfield(this_run, 'groupd')
         groupd = this_run.groupd;
     else
-        warning('Could not find groupd/yDims. Treating all cells as one group.');
-        groupd = nUnits;
+        error(['Could not find groupd/yDims for %d neurons. ', ...
+            'The script will not silently treat all neurons as one group.'], nUnits);
     end
 end
 
 groupd = groupd(:)';
+
+if isempty(groupd) || ~isnumeric(groupd) || ...
+        any(~isfinite(groupd)) || any(groupd <= 0) || ...
+        any(groupd ~= round(groupd))
+    error('groupd/yDims must contain finite positive integers.');
+end
 end
 
-function group_names = normalize_group_names(group_names, nGroups, this_run)
+function group_names = normalize_group_names(group_names, nGroups)
 if isempty(group_names)
-    candidate_fields = {'group_names', 'area_names', 'group_name', 'areas'};
-
-    for f = 1:numel(candidate_fields)
-        fn = candidate_fields{f};
-
-        if isfield(this_run, fn)
-            candidate = this_run.(fn);
-
-            if isstring(candidate)
-                candidate = cellstr(candidate);
-            end
-
-            if iscell(candidate) && numel(candidate) == nGroups
-                group_names = candidate;
-                break;
-            end
-        end
-    end
+    error(['group_names must be specified manually. Provide one area label ', ...
+        'for each of the %d model groups.'], nGroups);
 end
 
-if isempty(group_names)
-    group_names = cell(1, nGroups);
-
-    for g = 1:nGroups
-        group_names{g} = sprintf('Group %d', g);
-    end
+if ischar(group_names)
+    group_names = {group_names};
+elseif isstring(group_names)
+    group_names = cellstr(group_names(:))';
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
 else
-    if isstring(group_names)
-        group_names = cellstr(group_names);
-    end
+    error('group_names must be a char, string array, or cell array.');
+end
 
-    if ~iscell(group_names) || numel(group_names) ~= nGroups
-        error('group_names must be empty or a cell array with nGroups entries.');
-    end
+if numel(group_names) ~= nGroups
+    error('group_names must contain exactly %d entries, one per model group.', nGroups);
+end
 
-    for g = 1:nGroups
+for g = 1:nGroups
+    if isstring(group_names{g}) && isscalar(group_names{g})
         group_names{g} = char(group_names{g});
     end
+
+    if ~ischar(group_names{g})
+        error('group_names{%d} must be a char or scalar string.', g);
+    end
+
+    group_names{g} = strtrim(group_names{g});
+
+    if isempty(group_names{g})
+        error('group_names{%d} is empty.', g);
+    end
 end
+end
+
+function [group_display_names, group_file_tags, group_mapping_file_tag] = ...
+    build_group_labels_local(group_names)
+
+nGroups = numel(group_names);
+group_display_names = cell(1, nGroups);
+group_file_tags = cell(1, nGroups);
+
+for g = 1:nGroups
+    group_display_names{g} = sprintf('Group %d: %s', g, group_names{g});
+    group_file_tags{g} = sprintf('G%02d_%s', ...
+        g, sanitize_filename(group_names{g}));
+end
+
+group_mapping_file_tag = strjoin(group_file_tags, '_');
 end
 
 function [group_index_all, unit_index_within_group_all, group_row_ranges] = build_group_index(groupd)
@@ -1608,7 +1642,7 @@ end
 end
 
 function plot_size_effect_groups_fullrange( ...
-    S_response, L_response, groupd, ...
+    S_response, L_response, groupd, group_display_names, ...
     small_size, large_size, stim_tag, analysis_field, model_mode, ...
     window_label, ...
     marker_size, marker_face_alpha, marker_edge_alpha)
@@ -1663,7 +1697,7 @@ for g = 1:nGroups
 
     xlabel(sprintf('Small size %g: response in window', small_size));
     ylabel(sprintf('Large size %g: response in window', large_size));
-    title(sprintf('Group %d, n = %d cells', g, groupd(g)), ...
+    title(sprintf('%s, n = %d cells', group_display_names{g}, groupd(g)), ...
         'Interpreter', 'none');
 
     grid off;
@@ -1678,7 +1712,7 @@ sgtitle(sprintf('%s, %s, seqEst.%s, %s', ...
 end
 
 function plot_size_effect_groups_clean_brokenaxis( ...
-    S_response, L_response, groupd, ...
+    S_response, L_response, groupd, group_display_names, ...
     small_size, large_size, stim_tag, analysis_field, model_mode, ...
     window_label, ...
     marker_size, marker_face_alpha, marker_edge_alpha, ...
@@ -1735,7 +1769,8 @@ for g = 1:nGroups
 
         xlabel(sprintf('Small size %g: response in window', small_size));
         ylabel(sprintf('Large size %g: response in window', large_size));
-        title(sprintf('Group %d, n = %d cells, linear axis', g, groupd(g)), ...
+        title(sprintf('%s, n = %d cells, linear axis', ...
+            group_display_names{g}, groupd(g)), ...
             'Interpreter', 'none');
 
         grid off;
@@ -1775,7 +1810,8 @@ for g = 1:nGroups
 
             xlabel(sprintf('Small size %g: response in window', small_size));
             ylabel(sprintf('Large size %g: response in window', large_size));
-            title(sprintf('Group %d, n = %d cells, linear axis', g, groupd(g)), ...
+            title(sprintf('%s, n = %d cells, linear axis', ...
+                group_display_names{g}, groupd(g)), ...
                 'Interpreter', 'none');
 
             grid off;
@@ -1830,7 +1866,8 @@ for g = 1:nGroups
 
             xlabel(sprintf('Small size %g: response in window', small_size));
             ylabel(sprintf('Large size %g: response in window', large_size));
-            title(sprintf('Group %d, n = %d cells', g, groupd(g)), ...
+            title(sprintf('%s, n = %d cells', ...
+                group_display_names{g}, groupd(g)), ...
                 'Interpreter', 'none');
 
             grid off;
@@ -1849,7 +1886,8 @@ sgtitle(sprintf('%s, %s, seqEst.%s, %s', ...
 end
 
 function plot_metric_histograms_by_group( ...
-    effect, valid_effect_mask, groupd, stim_tag, analysis_field, model_mode, window_label)
+    effect, valid_effect_mask, groupd, group_display_names, ...
+    stim_tag, analysis_field, model_mode, window_label)
 
 metric_names = {'classic_SI', 'delta_SL', 'S_norm_diff'};
 nGroups = numel(groupd);
@@ -1880,10 +1918,11 @@ for m = 1:numel(metric_names)
         ylabel('Cell count');
 
         if isempty(vals)
-            title(sprintf('Group %d, n = 0', g), 'Interpreter', 'none');
+            title(sprintf('%s, n = 0', group_display_names{g}), ...
+                'Interpreter', 'none');
         else
-            title(sprintf('Group %d, n = %d, median = %.3f', ...
-                g, numel(vals), median(vals, 'omitnan')), ...
+            title(sprintf('%s, n = %d, median = %.3f', ...
+                group_display_names{g}, numel(vals), median(vals, 'omitnan')), ...
                 'Interpreter', 'none');
         end
     end
