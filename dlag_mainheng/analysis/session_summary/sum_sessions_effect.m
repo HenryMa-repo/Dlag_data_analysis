@@ -1,6 +1,6 @@
 %% sum_sessions_effect.m
 % Summarize neuron-wise size or contrast effects across sessions.
-% Revision: 2026-08-10c
+% Revision: 2026-08-25a
 %
 % This script reads the result mats written by plot_size_effect.m or
 % plot_contrast_effect.m and produces seven independent figures:
@@ -40,7 +40,7 @@ root_dir = 'I:\np_data';
 % Effect, data, and model settings
 % -------------------------------------------------------------------------
 
-effect_type = 'contrast';
+effect_type = 'size';
 % Options:
 %   'size'
 %   'contrast'
@@ -95,13 +95,19 @@ field_feedback = 'yRecon_use_feedback';
 % Session and group appearance
 % -------------------------------------------------------------------------
 
-group_display_names = {'Group 1', 'Group 2'};
+% Manual area labels in model-group order. These labels are used to select
+% the matching area-tagged upstream result files and to label/save the
+% summary. They do not determine neuron membership and are not compared with
+% any group-name field stored inside the input MAT files.
+group_names = {'V1', 'MT'};
 
 % Leave empty to label valid sessions S1, S2, ... in alphabetical folder
 % order. Or provide one label for each valid session after skipping.
 session_display_names = {};
 
-group_colors = [ ...
+% The first rows are assigned to the first groups. If nGroups is larger than
+% the number of supplied rows, additional distinct colors are generated.
+group_colors_base = [ ...
     0.0000, 0.4470, 0.7410; ...
     0.8500, 0.3250, 0.0980];
 
@@ -228,10 +234,10 @@ delta_group_offset = 0.19;
 % -------------------------------------------------------------------------
 
 figure_visible = 'on';
-close_after_save = false;
+close_after_save = true;
 
-save_figure = true;  % saves both FIG and vector SVG
-save_mat = true;
+save_figure = false;  % saves both FIG and vector SVG
+save_mat = false;
 
 font_name = 'Arial';
 font_size = 9;
@@ -294,8 +300,13 @@ validateattributes(analysis_window, {'numeric'}, ...
 validateattributes(sliding_step, {'numeric'}, ...
     {'scalar', 'real', 'positive', 'finite'}, ...
     mfilename, 'sliding_step');
-validateattributes(group_colors, {'numeric'}, ...
-    {'size', [2, 3], '>=', 0, '<=', 1}, mfilename, 'group_colors');
+if ~(isnumeric(group_colors_base) && isreal(group_colors_base) && ...
+        size(group_colors_base, 2) == 3 && ...
+        all(isfinite(group_colors_base(:))) && ...
+        all(group_colors_base(:) >= 0) && ...
+        all(group_colors_base(:) <= 1))
+    error('group_colors_base must be an N x 3 numeric matrix in [0, 1].');
+end
 
 if ~(isnumeric(session_shade_range) && numel(session_shade_range) == 2 && ...
         all(isfinite(session_shade_range)) && ...
@@ -361,10 +372,11 @@ if ~(isnumeric(delta_overflow_thresholds) && ...
 end
 delta_overflow_thresholds = reshape(delta_overflow_thresholds, 1, 2);
 
-if numel(group_display_names) ~= 2
-    error('group_display_names must contain exactly two labels.');
-end
-group_display_names = cellstr(string(group_display_names(:)))';
+group_names = normalizeManualGroupNamesLocal(group_names);
+[group_display_names, group_file_tags, group_mapping_file_tag] = ...
+    buildGroupLabelsLocal(group_names);
+nGroups = numel(group_names);
+group_colors = resolveGroupColorsLocal(group_colors_base, nGroups);
 
 if ~(isnumeric(comparison_x_positions) && ...
         numel(comparison_x_positions) == 4 && ...
@@ -427,6 +439,7 @@ fprintf('Regression mode      : %s\n', regression_mode);
 fprintf('Show session fits    : %d\n', show_session_fit_lines);
 fprintf('Slope style          : %s\n', slope_plot_style);
 fprintf('Delta style          : %s\n', delta_plot_style);
+fprintf('Group-area mapping   : %s\n', group_mapping_file_tag);
 
 %% ======================= FIND SESSION FOLDERS ==========================
 
@@ -466,7 +479,7 @@ for si = 1:numel(session_dirs)
                 session_dir, effect_type, effect_metric, ...
                 data_content, model_mode, runIdx, pick_contrast, ...
                 analysis_window, sliding_step, time_window_index, ...
-                field_names{f});
+                field_names{f}, group_mapping_file_tag);
 
             fprintf('  %-12s: %s\n', field_labels{f}, source_files{f});
         end
@@ -474,10 +487,18 @@ for si = 1:numel(session_dirs)
         validateSessionFieldCompatibilityLocal( ...
             compact_results, field_names, session_name);
 
-        metric_by_field = cell(numel(field_names), 2);
+        nGroups_this = numel(compact_results{1}.groupd);
+
+        if nGroups_this ~= nGroups
+            error(['Session %s contains %d model groups, but group_names ' ...
+                   'contains %d labels.'], ...
+                  session_name, nGroups_this, nGroups);
+        end
+
+        metric_by_field = cell(numel(field_names), nGroups);
 
         for f = 1:numel(field_names)
-            for g = 1:2
+            for g = 1:nGroups
                 metric_by_field{f, g} = ...
                     compact_results{f}.metric_by_group{g};
             end
@@ -575,7 +596,7 @@ for p = 1:numel(comparison_defs)
     all_y = [];
 
     for s = 1:nSessions
-        for g = 1:2
+        for g = 1:nGroups
             x = sessions(s).metric_by_field{def.base_field_index, g};
             y = sessions(s).metric_by_field{def.comparison_field_index, g};
             valid = isfinite(x) & isfinite(y);
@@ -588,13 +609,13 @@ for p = 1:numel(comparison_defs)
         all_x, all_y, axis_options);
 
     session_axis_info = repmat(display_axis_info, nSessions, 1);
-    session_group = repmat(empty_session_group, nSessions, 2);
+    session_group = repmat(empty_session_group, nSessions, nGroups);
 
     for s = 1:nSessions
         session_x = [];
         session_y = [];
 
-        for g = 1:2
+        for g = 1:nGroups
             x = sessions(s).metric_by_field{def.base_field_index, g};
             y = sessions(s).metric_by_field{def.comparison_field_index, g};
             valid = isfinite(x) & isfinite(y);
@@ -605,7 +626,7 @@ for p = 1:numel(comparison_defs)
         session_axis_info(s) = computeSymmetricBrokenAxisInfoLocal( ...
             session_x, session_y, axis_options);
 
-        for g = 1:2
+        for g = 1:nGroups
             x_raw = sessions(s).metric_by_field{def.base_field_index, g};
             y_raw = sessions(s).metric_by_field{def.comparison_field_index, g};
             valid = isfinite(x_raw) & isfinite(y_raw);
@@ -641,15 +662,16 @@ end
 %% ========================== BUILD SLOPES ===============================
 
 nComponentComparisons = 4;
-slope_values = nan(nSessions, nComponentComparisons, 2);
-slope_regression = repmat(empty_reg, nSessions, nComponentComparisons, 2);
+slope_values = nan(nSessions, nComponentComparisons, nGroups);
+slope_regression = repmat( ...
+    empty_reg, nSessions, nComponentComparisons, nGroups);
 
 for c = 1:nComponentComparisons
     scatter_panel_idx = c + 1;
     this_panel = scatter_summary(scatter_panel_idx);
 
     for s = 1:nSessions
-        for g = 1:2
+        for g = 1:nGroups
             if strcmp(regression_mode, 'central')
                 reg = this_panel.session_group(s, g).regression_central;
             else
@@ -666,10 +688,10 @@ for c = 1:nComponentComparisons
 end
 
 slope_stats = repmat(computeBasicStatsLocal([]), ...
-    nComponentComparisons, 2);
+    nComponentComparisons, nGroups);
 
 for c = 1:nComponentComparisons
-    for g = 1:2
+    for g = 1:nGroups
         slope_stats(c, g) = computeBasicStatsLocal( ...
             slope_values(:, c, g));
     end
@@ -679,15 +701,15 @@ end
 
 % Dimensions: comparison x group x base-sign x session.
 % base-sign index 1 = base >= 0; index 2 = base < 0.
-delta_by_session = cell(nComponentComparisons, 2, 2, nSessions);
-delta_pooled = cell(nComponentComparisons, 2, 2);
+delta_by_session = cell(nComponentComparisons, nGroups, 2, nSessions);
+delta_pooled = cell(nComponentComparisons, nGroups, 2);
 delta_stats = repmat(computeBasicStatsLocal([]), ...
-    nComponentComparisons, 2, 2);
+    nComponentComparisons, nGroups, 2);
 
 for c = 1:nComponentComparisons
     scatter_panel_idx = c + 1;
 
-    for g = 1:2
+    for g = 1:nGroups
         for sign_idx = 1:2
             pooled = [];
 
@@ -772,10 +794,10 @@ delta_overflow_tag = deltaOverflowFileTagLocal( ...
     delta_overflow_thresholds);
 
 out_base = sprintf( ...
-    ['sum_sessions_effect_%s_%s_%s_run%03d_%s_%s_%s_%s_' ...
+    ['sum_sessions_effect_%s_%s_%s_run%03d_%s_%s_%s_%s_%s_' ...
      'slope_%s_%s_%s_delta_%s_%s_%s_%s'], ...
     effect_tag, sanitizeFilenameLocal(data_content), model_tag, runIdx, ...
-    metric_tag, selection_tag, time_tag, fit_tag, ...
+    group_mapping_file_tag, metric_tag, selection_tag, time_tag, fit_tag, ...
     slope_plot_style, slope_mean_tag, slope_median_tag, ...
     delta_plot_style, delta_mean_tag, delta_median_tag, ...
     delta_overflow_tag);
@@ -803,7 +825,7 @@ mat_file = fullfile(root_dir, sprintf('%s_summary.mat', out_base));
 EffectSummary = struct();
 EffectSummary.meta = struct();
 EffectSummary.meta.program = mfilename;
-EffectSummary.meta.revision = '2026-08-10b';
+EffectSummary.meta.revision = '2026-08-25a';
 EffectSummary.meta.root_dir = root_dir;
 EffectSummary.meta.effect_type = effect_type;
 EffectSummary.meta.effect_metric = effect_metric;
@@ -860,7 +882,13 @@ EffectSummary.meta.num_valid_sessions = nSessions;
 EffectSummary.meta.num_skipped_sessions = numel(skipped);
 EffectSummary.meta.session_display_names = session_display_names;
 EffectSummary.meta.session_shade_weights = session_shade_weights;
+EffectSummary.meta.num_groups = nGroups;
+EffectSummary.meta.group_names = group_names;
 EffectSummary.meta.group_display_names = group_display_names;
+EffectSummary.meta.group_file_tags = group_file_tags;
+EffectSummary.meta.group_mapping_file_tag = group_mapping_file_tag;
+EffectSummary.meta.group_label_source = 'manual group_names parameter';
+EffectSummary.meta.group_colors_base = group_colors_base;
 EffectSummary.meta.group_colors = group_colors;
 EffectSummary.meta.session_colors = session_colors;
 EffectSummary.meta.save_figure = save_figure;
@@ -1250,7 +1278,8 @@ function [compact_result, selected_file] = ...
         locateAndLoadEffectResultLocal( ...
         session_dir, effect_type, effect_metric, ...
         data_content, model_mode, runIdx, pick_contrast, ...
-        analysis_window, sliding_step, time_window_index, analysis_field)
+        analysis_window, sliding_step, time_window_index, analysis_field, ...
+        group_mapping_file_tag)
 
     safe_data = sanitizeFilenameLocal(data_content);
     safe_field = sanitizeFilenameLocal(analysis_field);
@@ -1262,19 +1291,21 @@ function [compact_result, selected_file] = ...
         base_name = [base_name, sizeContrastFileSuffixLocal(pick_contrast)];
     end
 
+    area_tagged_base_name = sprintf( ...
+        '%s_%s', base_name, group_mapping_file_tag);
     time_parameter_tag = sprintf('_wn%s_st%s', ...
         formatSecondsForFilenameLocal(analysis_window), ...
         formatSecondsForFilenameLocal(sliding_step));
 
     tagged_name = sprintf('%s%s_w%02d.mat', ...
-        base_name, time_parameter_tag, time_window_index);
-
+        area_tagged_base_name, time_parameter_tag, time_window_index);
     names_to_find = {tagged_name};
 
     if time_window_index == 1
-        % Full-trial single-window outputs intentionally retain the legacy
-        % filename without a time suffix. Metadata below disambiguates it.
-        names_to_find{end + 1} = sprintf('%s.mat', base_name); %#ok<AGROW>
+        % A full-trial single-window output has no time suffix, but it always
+        % carries the manually specified group-area mapping tag.
+        names_to_find{end + 1} = sprintf( ...
+            '%s.mat', area_tagged_base_name); %#ok<AGROW>
     end
 
     if strcmp(model_mode, 'all_condition_model')
@@ -1312,23 +1343,24 @@ function [compact_result, selected_file] = ...
     candidate_files = unique(candidate_files, 'stable');
 
     if isempty(candidate_files)
-        error(['No %s effect result found for field %s. Expected filename ' ...
-               '%s%s within %s.'], ...
-              effect_type, analysis_field, tagged_name, ...
-              legacyNameNoteLocal(time_window_index, base_name), session_dir);
+        error(['No %s effect result found for field %s and group mapping %s. ' ...
+               'Expected one of these filenames: %s within %s.'], ...
+              effect_type, analysis_field, group_mapping_file_tag, ...
+              strjoin(names_to_find, ', '), session_dir);
     end
 
     failure_messages = cell(1, numel(candidate_files));
+    valid_results = cell(1, numel(candidate_files));
+    valid_mask = false(1, numel(candidate_files));
 
     for k = 1:numel(candidate_files)
         try
-            compact_result = loadAndValidateEffectResultLocal( ...
+            valid_results{k} = loadAndValidateEffectResultLocal( ...
                 candidate_files{k}, effect_type, effect_metric, ...
                 data_content, model_mode, runIdx, pick_contrast, ...
                 analysis_window, sliding_step, time_window_index, ...
                 analysis_field);
-            selected_file = candidate_files{k};
-            return;
+            valid_mask(k) = true;
 
         catch ME
             failure_messages{k} = sprintf('%s -> %s', ...
@@ -1336,20 +1368,27 @@ function [compact_result, selected_file] = ...
         end
     end
 
+    valid_idx = find(valid_mask);
+
+    if numel(valid_idx) == 1
+        compact_result = valid_results{valid_idx};
+        selected_file = candidate_files{valid_idx};
+        return;
+    end
+
+    if numel(valid_idx) > 1
+        valid_files = candidate_files(valid_idx);
+        error(['More than one metadata-compatible effect result was found ' ...
+               'for field %s and group mapping %s:\n%s'], ...
+              analysis_field, group_mapping_file_tag, ...
+              strjoin(valid_files, '\n'));
+    end
+
     failure_messages = failure_messages(~cellfun(@isempty, failure_messages));
 
     error(['Candidate file(s) were found for field %s, but none matched ' ...
            'the requested metadata:\n%s'], ...
           analysis_field, strjoin(failure_messages, '\n'));
-end
-
-function note = legacyNameNoteLocal(time_window_index, base_name)
-
-    if time_window_index == 1
-        note = sprintf(' or %s.mat for a full-trial single window', base_name);
-    else
-        note = '';
-    end
 end
 
 function compact = loadAndValidateEffectResultLocal( ...
@@ -1430,9 +1469,9 @@ function compact = loadAndValidateEffectResultLocal( ...
 
     groupd = double(result.groupd(:)');
 
-    if numel(groupd) ~= 2 || any(~isfinite(groupd)) || ...
+    if isempty(groupd) || any(~isfinite(groupd)) || ...
             any(groupd <= 0) || any(mod(groupd, 1) ~= 0)
-        error('groupd must contain exactly two positive integer group sizes.');
+        error('groupd must contain finite positive integer group sizes.');
     end
 
     values = result.(effect_metric);
@@ -1449,9 +1488,10 @@ function compact = loadAndValidateEffectResultLocal( ...
     end
 
     row_start = 1;
-    metric_by_group = cell(1, 2);
+    nGroups = numel(groupd);
+    metric_by_group = cell(1, nGroups);
 
-    for g = 1:2
+    for g = 1:nGroups
         row_end = row_start + groupd(g) - 1;
         metric_by_group{g} = values(row_start:row_end);
         row_start = row_end + 1;
@@ -1551,6 +1591,79 @@ function name = sanitizeFilenameLocal(name)
     end
 end
 
+function group_names = normalizeManualGroupNamesLocal(group_names)
+
+    if isempty(group_names)
+        error(['group_names must be specified manually with one area label ' ...
+               'for each model group.']);
+    end
+
+    if ischar(group_names)
+        group_names = {group_names};
+    elseif isstring(group_names)
+        group_names = cellstr(group_names(:))';
+    elseif iscell(group_names)
+        group_names = reshape(group_names, 1, []);
+    else
+        error('group_names must be a char, string array, or cell array.');
+    end
+
+    for g = 1:numel(group_names)
+        if isstring(group_names{g}) && isscalar(group_names{g})
+            group_names{g} = char(group_names{g});
+        end
+
+        if ~ischar(group_names{g})
+            error('group_names{%d} must be a char or scalar string.', g);
+        end
+
+        group_names{g} = strtrim(group_names{g});
+
+        if isempty(group_names{g})
+            error('group_names{%d} is empty.', g);
+        end
+    end
+end
+
+function [group_display_names, group_file_tags, group_mapping_file_tag] = ...
+        buildGroupLabelsLocal(group_names)
+
+    nGroups = numel(group_names);
+    group_display_names = cell(1, nGroups);
+    group_file_tags = cell(1, nGroups);
+
+    for g = 1:nGroups
+        group_display_names{g} = sprintf( ...
+            'Group %d: %s', g, group_names{g});
+        group_file_tags{g} = sprintf( ...
+            'G%02d_%s', g, sanitizeFilenameLocal(group_names{g}));
+    end
+
+    group_mapping_file_tag = strjoin(group_file_tags, '_');
+end
+
+function group_colors = resolveGroupColorsLocal(group_colors_base, nGroups)
+
+    automatic_colors = lines(max(nGroups, 1));
+    group_colors = automatic_colors(1:nGroups, :);
+    nProvided = min(size(group_colors_base, 1), nGroups);
+
+    if nProvided > 0
+        group_colors(1:nProvided, :) = group_colors_base(1:nProvided, :);
+    end
+end
+
+function offsets = centeredGroupOffsetsLocal(nGroups, two_group_half_offset)
+
+    if nGroups <= 1
+        offsets = 0;
+        return;
+    end
+
+    spacing = 2 .* two_group_half_offset;
+    offsets = ((1:nGroups) - (nGroups + 1) ./ 2) .* spacing;
+end
+
 function tag = effectTypeFileTagLocal(effect_type)
 
     tag = sanitizeFilenameLocal(effect_type);
@@ -1645,13 +1758,14 @@ function [session_colors, weights, gray_colors] = ...
         weights = linspace(shade_range(1), shade_range(2), nSessions);
     end
 
-    session_colors = nan(nSessions, 2, 3);
+    nGroups = size(group_colors, 1);
+    session_colors = nan(nSessions, nGroups, 3);
     gray_colors = nan(nSessions, 3);
 
     for s = 1:nSessions
         w = weights(s);
 
-        for g = 1:2
+        for g = 1:nGroups
             this_color = (1 - w) .* [1, 1, 1] + w .* group_colors(g, :);
             session_colors(s, g, :) = reshape(this_color, 1, 1, 3);
         end
@@ -2130,10 +2244,11 @@ function fig = plotScatterSummaryLocal(panel, allow_fit, config)
         'HandleVisibility', 'off');
 
     nSessions = size(panel.session_group, 1);
+    nGroups = size(panel.session_group, 2);
 
     if allow_fit
         for s = 1:nSessions
-            for g = 1:2
+            for g = 1:nGroups
                 color = sessionColorLocal(config.session_colors, s, g);
 
                 if strcmp(config.regression_mode, 'central')
@@ -2149,7 +2264,7 @@ function fig = plotScatterSummaryLocal(panel, allow_fit, config)
     end
 
     for s = 1:nSessions
-        for g = 1:2
+        for g = 1:nGroups
             x = panel.session_group(s, g).x;
             y = panel.session_group(s, g).y;
 
@@ -2382,10 +2497,11 @@ end
 function addGroupSessionLegendLocal(ax, config, location)
 
     nSessions = numel(config.session_display_names);
-    handles = gobjects(2 + nSessions, 1);
-    labels = cell(2 + nSessions, 1);
+    nGroups = numel(config.group_display_names);
+    handles = gobjects(nGroups + nSessions, 1);
+    labels = cell(nGroups + nSessions, 1);
 
-    for g = 1:2
+    for g = 1:nGroups
         handles(g) = plot(ax, nan, nan, 'o', ...
             'MarkerSize', 6, ...
             'MarkerFaceColor', config.group_colors(g, :), ...
@@ -2395,12 +2511,12 @@ function addGroupSessionLegendLocal(ax, config, location)
     end
 
     for s = 1:nSessions
-        handles(2 + s) = plot(ax, nan, nan, 'o', ...
+        handles(nGroups + s) = plot(ax, nan, nan, 'o', ...
             'MarkerSize', 6, ...
             'MarkerFaceColor', config.session_gray_colors(s, :), ...
             'MarkerEdgeColor', config.session_gray_colors(s, :), ...
             'LineStyle', 'none');
-        labels{2 + s} = config.session_display_names{s};
+        labels{nGroups + s} = config.session_display_names{s};
     end
 
     legend(ax, handles, labels, ...
@@ -2461,7 +2577,9 @@ function fig = plotSlopeSummaryLocal(slope_values, config)
 
     nSessions = size(slope_values, 1);
     nComparisons = size(slope_values, 2);
-    group_offsets = [-config.group_offset, config.group_offset];
+    nGroups = size(slope_values, 3);
+    group_offsets = centeredGroupOffsetsLocal(nGroups, config.group_offset);
+    x_padding = max(0.65, max(abs(group_offsets)) + 0.35);
 
     y_limits = config.y_limits;
 
@@ -2471,7 +2589,7 @@ function fig = plotSlopeSummaryLocal(slope_values, config)
     end
 
     for c = 1:nComparisons
-        for g = 1:2
+        for g = 1:nGroups
             x_center = config.x_positions(c) + group_offsets(g);
             values = slope_values(:, c, g);
             values = values(isfinite(values));
@@ -2563,14 +2681,15 @@ function fig = plotSlopeSummaryLocal(slope_values, config)
     end
 
     plot(ax, ...
-        [config.x_positions(1) - 0.6, config.x_positions(end) + 0.6], ...
+        [config.x_positions(1) - x_padding, ...
+         config.x_positions(end) + x_padding], ...
         [1, 1], '--', ...
         'Color', [0.55, 0.55, 0.55], ...
         'LineWidth', 0.9, ...
         'HandleVisibility', 'off');
 
-    xlim(ax, [config.x_positions(1) - 0.65, ...
-              config.x_positions(end) + 0.65]);
+    xlim(ax, [config.x_positions(1) - x_padding, ...
+              config.x_positions(end) + x_padding]);
     ylim(ax, y_limits);
     set(ax, ...
         'XTick', config.x_positions, ...
@@ -2604,7 +2723,9 @@ function fig = plotDeltaSummaryLocal( ...
 
     nSessions = size(delta_by_session, 4);
     nComparisons = size(delta_by_session, 1);
-    group_offsets = [-config.group_offset, config.group_offset];
+    nGroups = size(delta_by_session, 2);
+    group_offsets = centeredGroupOffsetsLocal(nGroups, config.group_offset);
+    x_padding = max(0.65, max(abs(group_offsets)) + 0.35);
     axes_handles = gobjects(1, 2);
 
     for sign_idx = 1:2
@@ -2615,14 +2736,15 @@ function fig = plotDeltaSummaryLocal( ...
         y_limits = overflow_info.plot_y_limits;
 
         plot(ax, ...
-            [config.x_positions(1) - 0.6, config.x_positions(end) + 0.6], ...
+            [config.x_positions(1) - x_padding, ...
+             config.x_positions(end) + x_padding], ...
             [0, 0], '--', ...
             'Color', [0.60, 0.60, 0.60], ...
             'LineWidth', 0.85, ...
             'HandleVisibility', 'off');
 
         for c = 1:nComparisons
-            for g = 1:2
+            for g = 1:nGroups
                 x_center = config.x_positions(c) + group_offsets(g);
                 values = delta_pooled{c, g, sign_idx};
                 values = values(isfinite(values));
@@ -2732,8 +2854,8 @@ function fig = plotDeltaSummaryLocal( ...
             end
         end
 
-        xlim(ax, [config.x_positions(1) - 0.65, ...
-                  config.x_positions(end) + 0.65]);
+        xlim(ax, [config.x_positions(1) - x_padding, ...
+                  config.x_positions(end) + x_padding]);
         ylim(ax, y_limits);
         set(ax, ...
             'XTick', config.x_positions, ...
@@ -2776,10 +2898,10 @@ function fig = plotDeltaSummaryLocal( ...
         end
     end
 
-    legend_handles = gobjects(2 + nSessions, 1);
-    legend_labels = cell(2 + nSessions, 1);
+    legend_handles = gobjects(nGroups + nSessions, 1);
+    legend_labels = cell(nGroups + nSessions, 1);
 
-    for g = 1:2
+    for g = 1:nGroups
         legend_handles(g) = plot(axes_handles(1), nan, nan, 'o', ...
             'MarkerSize', 6, ...
             'MarkerFaceColor', config.group_colors(g, :), ...
@@ -2789,12 +2911,13 @@ function fig = plotDeltaSummaryLocal( ...
     end
 
     for s = 1:nSessions
-        legend_handles(2 + s) = plot(axes_handles(1), nan, nan, 'o', ...
+        legend_handles(nGroups + s) = plot( ...
+            axes_handles(1), nan, nan, 'o', ...
             'MarkerSize', 6, ...
             'MarkerFaceColor', config.session_gray_colors(s, :), ...
             'MarkerEdgeColor', config.session_gray_colors(s, :), ...
             'LineStyle', 'none');
-        legend_labels{2 + s} = config.session_display_names{s};
+        legend_labels{nGroups + s} = config.session_display_names{s};
     end
 
     lgd = legend(axes_handles(1), legend_handles, legend_labels, ...
@@ -2835,7 +2958,7 @@ function overflow_info = computeDeltaOverflowInfoLocal( ...
         values = [];
 
         for c = 1:size(delta_pooled, 1)
-            for g = 1:2
+            for g = 1:size(delta_pooled, 2)
                 values = [values; ...
                     delta_pooled{c, g, sign_idx}(:)]; %#ok<AGROW>
             end

@@ -1,5 +1,5 @@
 %% =========================================================================
-% sum_session_effect_comparison.m
+% sum_sessions_effect_comparison.m
 %
 % Purpose:
 % Summarize effect-comparison results across sessions.
@@ -110,6 +110,12 @@ model_mode = 'all_condition_model';
 
 runIdx = 1;
 
+% Manual area labels in model-group order. They select the matching
+% area-tagged upstream comparison files and label/save this summary. They do
+% not determine unit membership and are not compared with any group-name
+% field stored inside comparison_summary.
+group_names = {'V1', 'MT'};
+
 % -------------------------------------------------------------------------
 % Size-only contrast filter
 % -------------------------------------------------------------------------
@@ -191,7 +197,7 @@ comparation_fields = { ...
 % -------------------------------------------------------------------------
 % Time window selection
 % -------------------------------------------------------------------------
-time_selection_mode = 'specific_window';
+time_selection_mode = 'full_trial';
 % Options:
 % 'full_trial'
 % 'specific_window'
@@ -344,6 +350,17 @@ validateUserSettings(effect_type, model_mode, metric_name, ...
 
 baseline_fields = normalize_field_list_local(baseline_fields, 'baseline_fields');
 comparation_fields = normalize_field_list_local(comparation_fields, 'comparation_fields');
+group_names = normalizeManualGroupNamesLocal(group_names);
+[group_display_names, group_file_tags, group_mapping_file_tag] = ...
+    buildGroupLabelsLocal(group_names);
+
+if ~(isnumeric(group_colors_base) && isreal(group_colors_base) && ...
+        size(group_colors_base, 2) == 3 && ...
+        all(isfinite(group_colors_base(:))) && ...
+        all(group_colors_base(:) >= 0) && ...
+        all(group_colors_base(:) <= 1))
+    error('group_colors_base must be an N x 3 numeric matrix in [0, 1].');
+end
 
 effect_tag = makeEffectTag(effect_type);
 model_tag = makeModelTag(model_mode);
@@ -357,13 +374,14 @@ comparison_file_tag = makeComparisonSetFileTag(baseline_fields, comparation_fiel
 delta_axis_file_tag = makeDeltaAxisFileTag(use_broken_axis_for_delta);
 
 if strcmp(effect_type, 'size')
+    out_base = sprintf('%s_%s_effectComp_%s_%s_%s_%s_%s_%s', ...
+        data_content, effect_tag, model_tag, metric_tag, ...
+        comparison_file_tag, contrast_filter.file_tag, ...
+        group_mapping_file_tag, time_tag);
+else
     out_base = sprintf('%s_%s_effectComp_%s_%s_%s_%s_%s', ...
         data_content, effect_tag, model_tag, metric_tag, ...
-        comparison_file_tag, contrast_filter.file_tag, time_tag);
-else
-    out_base = sprintf('%s_%s_effectComp_%s_%s_%s_%s', ...
-        data_content, effect_tag, model_tag, metric_tag, ...
-        comparison_file_tag, time_tag);
+        comparison_file_tag, group_mapping_file_tag, time_tag);
 end
 
 summary_folder_name = getSummaryFolderName(effect_type);
@@ -375,6 +393,7 @@ fprintf('Model mode            : %s\n', model_mode);
 fprintf('Run index             : %d\n', runIdx);
 fprintf('Metric                : %s\n', metric_name);
 fprintf('Comparison file tag   : %s\n', comparison_file_tag);
+fprintf('Group-area mapping    : %s\n', group_mapping_file_tag);
 
 if strcmp(effect_type, 'size')
     fprintf('Pick contrast         : %d (%s)\n', ...
@@ -426,6 +445,7 @@ for si = 1:numel(session_dirs)
             target_analysis_window, target_sliding_step, ...
             target_time_window_index, ...
             summary_folder_name, ...
+            group_mapping_file_tag, ...
             ref);
 
         records{end+1} = rec; %#ok<SAGROW>
@@ -454,6 +474,17 @@ end
 
 fprintf('\nLoaded %d valid sessions.\n', numel(records));
 fprintf('Skipped %d sessions.\n', numel(skipped));
+
+if numel(group_names) ~= ref.nGroups
+    error(['group_names contains %d labels, but the loaded comparison ' ...
+           'results contain %d model groups.'], ...
+          numel(group_names), ref.nGroups);
+end
+
+ref.group_names = group_names;
+ref.group_display_names = group_display_names;
+ref.group_file_tags = group_file_tags;
+ref.group_mapping_file_tag = group_mapping_file_tag;
 
 %% ======================= STACK VALUES ==================================
 
@@ -621,6 +652,69 @@ empty_mask = cellfun(@isempty, fields);
 
 if any(empty_mask)
     error('%s contains empty entries.', var_name);
+end
+end
+
+function group_names = normalizeManualGroupNamesLocal(group_names)
+if isempty(group_names)
+    error(['group_names must be specified manually with one area label ' ...
+           'for each model group.']);
+end
+
+if ischar(group_names)
+    group_names = {group_names};
+elseif isstring(group_names)
+    group_names = cellstr(group_names(:))';
+elseif iscell(group_names)
+    group_names = reshape(group_names, 1, []);
+else
+    error('group_names must be a char, string array, or cell array.');
+end
+
+for g = 1:numel(group_names)
+    if isstring(group_names{g}) && isscalar(group_names{g})
+        group_names{g} = char(group_names{g});
+    end
+
+    if ~ischar(group_names{g})
+        error('group_names{%d} must be a char or scalar string.', g);
+    end
+
+    group_names{g} = strtrim(group_names{g});
+
+    if isempty(group_names{g})
+        error('group_names{%d} is empty.', g);
+    end
+end
+end
+
+function [group_display_names, group_file_tags, group_mapping_file_tag] = ...
+        buildGroupLabelsLocal(group_names)
+nGroups = numel(group_names);
+group_display_names = cell(1, nGroups);
+group_file_tags = cell(1, nGroups);
+
+for g = 1:nGroups
+    group_display_names{g} = sprintf( ...
+        'Group %d: %s', g, group_names{g});
+    group_file_tags{g} = sprintf( ...
+        'G%02d_%s', g, sanitizeGroupNameForFileLocal(group_names{g}));
+end
+
+group_mapping_file_tag = strjoin(group_file_tags, '_');
+end
+
+function name = sanitizeGroupNameForFileLocal(name)
+if isstring(name)
+    name = char(name);
+end
+
+name = regexprep(name, '[^a-zA-Z0-9_\-]', '_');
+name = regexprep(name, '_+', '_');
+name = strtrim(name);
+
+if isempty(name)
+    name = 'unnamed';
 end
 end
 
@@ -897,6 +991,19 @@ switch char(effect_type)
 end
 end
 
+function tf = filenameHasExactGroupMappingLocal(filename, group_mapping_file_tag)
+[~, stem, extension] = fileparts(filename);
+
+if ~strcmpi(extension, '.mat')
+    tf = false;
+    return;
+end
+
+escaped_tag = regexptranslate('escape', group_mapping_file_tag);
+expression = ['_', escaped_tag, '(_wn.*_w[0-9]+)?$'];
+tf = ~isempty(regexp(stem, expression, 'once'));
+end
+
 function session_dirs = findCatgtSessionDirs(root_dir)
 listing = dir(fullfile(root_dir, '*', 'catgt_*'));
 listing = listing([listing.isdir]);
@@ -948,7 +1055,7 @@ function [rec, ref] = readOneSessionEffectComparison( ...
     baseline_fields, comparation_fields, ...
     time_selection_mode, ...
     target_analysis_window, target_sliding_step, target_time_window_index, ...
-    summary_folder_name, ref)
+    summary_folder_name, group_mapping_file_tag, ref)
 
 summary_dir = getSummaryDirForSession(session_dir, data_content, model_mode, ...
     runIdx, summary_folder_name);
@@ -961,6 +1068,18 @@ summary_files = dir(fullfile(summary_dir, '*.mat'));
 
 if isempty(summary_files)
     error('No summary mat files found in: %s', summary_dir);
+end
+
+mapping_mask = arrayfun( ...
+    @(x) filenameHasExactGroupMappingLocal( ...
+        x.name, group_mapping_file_tag), ...
+    summary_files);
+summary_files = summary_files(mapping_mask);
+
+if isempty(summary_files)
+    error(['No comparison-summary MAT filename in %s contains the exact ' ...
+           'group mapping %s.'], ...
+          summary_dir, group_mapping_file_tag);
 end
 
 comparison_list = buildComparisonList(baseline_fields, comparation_fields);
@@ -1187,7 +1306,6 @@ required_fields = { ...
     'comparation_field', ...
     'group', ...
     'groupd', ...
-    'group_names', ...
     'analysis_window', ...
     'sliding_step', ...
     'time_window_index', ...
@@ -1213,6 +1331,19 @@ if ~strcmp(char(S.baseline_field), char(baseline_field)) || ...
     error('Field comparison mismatch in %s.', summary_file);
 end
 
+groupd = double(S.groupd(:)');
+
+if isempty(groupd) || any(~isfinite(groupd)) || ...
+        any(groupd <= 0) || any(groupd ~= round(groupd))
+    error('groupd in %s must contain finite positive integers.', summary_file);
+end
+
+if numel(S.group) ~= numel(groupd)
+    error(['comparison_summary in %s contains %d group structures, but ' ...
+           'groupd contains %d entries.'], ...
+          summary_file, numel(S.group), numel(groupd));
+end
+
 for g = 1:numel(S.group)
     if ~isfield(S.group(g), 'regression_all')
         error('summary.group(%d).regression_all missing in %s.', g, summary_file);
@@ -1234,17 +1365,27 @@ function ref = updateAndCheckEffectReference(ref, rec, comparison_list, session_
 first_summary = rec.comparison(1).summary;
 
 nGroups = numel(first_summary.group);
-group_names = first_summary.group_names;
+reference_groupd = double(first_summary.groupd(:)');
 
-if isstring(group_names)
-    group_names = cellstr(group_names);
+for c = 2:numel(rec.comparison)
+    current_summary = rec.comparison(c).summary;
+    current_nGroups = numel(current_summary.group);
+    current_groupd = double(current_summary.groupd(:)');
+
+    if current_nGroups ~= nGroups
+        error(['Comparison %d in %s contains %d groups, but comparison 1 ' ...
+               'contains %d groups.'], ...
+              c, session_dir, current_nGroups, nGroups);
+    end
+
+    if ~isequal(current_groupd, reference_groupd)
+        error(['groupd mismatch between comparison 1 and comparison %d ' ...
+               'within %s.'], c, session_dir);
+    end
 end
-
-group_names = reshape(group_names, 1, []);
 
 if isempty(fieldnames(ref))
     ref.nGroups = nGroups;
-    ref.group_names = group_names;
     ref.comparison_list = comparison_list;
     return;
 end
@@ -1410,12 +1551,17 @@ M.meta.comparison_file_tag = makeComparisonSetFileTag(baseline_fields, comparati
 M.meta.num_sessions = nSessions;
 M.meta.num_comparisons = nComparisons;
 M.meta.num_groups = nGroups;
+M.meta.group_mapping_file_tag = ref.group_mapping_file_tag;
+M.meta.group_label_source = 'manual group_names parameter';
 
 M.settings.baseline_fields = baseline_fields;
 M.settings.comparation_fields = comparation_fields;
 
 M.labels.group_names = ref.group_names;
-M.labels.group_short = makeGroupShortLabels(nGroups);
+M.labels.group_display_names = ref.group_display_names;
+M.labels.group_file_tags = ref.group_file_tags;
+M.labels.group_mapping_file_tag = ref.group_mapping_file_tag;
+M.labels.group_short = ref.group_file_tags;
 M.labels.comparison = {comparison_info.comparison_label};
 M.labels.session = {session_info.session_label};
 
@@ -1617,7 +1763,7 @@ for g = 1:nGroups
         'MarkerSize', 7);
 end
 
-legend(ax, dummy, M.labels.group_short, ...
+legend(ax, dummy, M.labels.group_display_names, ...
     'Location', 'eastoutside', ...
     'Interpreter', 'none', ...
     'Box', 'off');
@@ -1966,14 +2112,12 @@ w = max(min_w, min(max_w, w));
 end
 
 function colors = resolveGroupColors(group_colors_base, nGroups)
-colors = zeros(nGroups, 3);
+automatic_colors = lines(max(nGroups, 1));
+colors = automatic_colors(1:nGroups, :);
+nProvided = min(size(group_colors_base, 1), nGroups);
 
-for g = 1:nGroups
-    if g <= size(group_colors_base, 1)
-        colors(g, :) = group_colors_base(g, :);
-    else
-        colors(g, :) = [0 0 0];
-    end
+if nProvided > 0
+    colors(1:nProvided, :) = group_colors_base(1:nProvided, :);
 end
 end
 
