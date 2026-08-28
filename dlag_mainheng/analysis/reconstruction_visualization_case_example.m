@@ -100,7 +100,7 @@ neuron_label_right = 0.062;
 neuron_label_width = 0.058;
 
 % Save switches. FIG and SVG are enabled for later vector-graphics editing.
-save_fig = true;
+save_fig = false;
 save_svg = true;
 save_png = false;
 close_after_save = true;

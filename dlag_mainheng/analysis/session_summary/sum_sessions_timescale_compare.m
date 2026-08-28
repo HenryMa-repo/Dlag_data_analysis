@@ -64,7 +64,7 @@ fig_visible = 'on';
 % on, off
 
 save_mat = true;
-save_fig = true;
+save_fig = false;
 save_png = true;
 close_after_save = true;
 

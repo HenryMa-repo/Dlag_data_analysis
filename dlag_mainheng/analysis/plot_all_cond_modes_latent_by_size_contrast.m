@@ -67,7 +67,7 @@ sem_face_alpha = 0.15;
 figure_position = [80 60 1600 1100];
 figure_visible = 'on';
 
-save_fig = true;
+save_fig = false;
 save_png = true;
 export_resolution = 300;
 

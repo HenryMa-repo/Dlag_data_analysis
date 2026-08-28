@@ -132,7 +132,7 @@ figure_visible = 'on';
 max_tiles_per_row = 5;
 
 % Save switches.
-save_fig = true;
+save_fig = false;
 save_png = true;
 close_after_save = true;
 png_dpi = 300;

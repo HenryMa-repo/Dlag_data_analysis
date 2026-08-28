@@ -81,7 +81,7 @@ gpl_mat_name = 'unit_gpl_results_sponsub.mat';
 % -------------------------------------------------------------------------
 
 save_mat = true;
-save_fig = true;
+save_fig = false;
 save_svg = true;
 save_png = true;
 close_after_save = true;

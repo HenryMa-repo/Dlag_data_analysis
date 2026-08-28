@@ -236,8 +236,8 @@ delta_group_offset = 0.19;
 figure_visible = 'on';
 close_after_save = true;
 
-save_figure = false;  % saves both FIG and vector SVG
-save_mat = false;
+save_figure = true;  % saves both FIG and vector SVG
+save_mat = true;
 
 font_name = 'Arial';
 font_size = 9;

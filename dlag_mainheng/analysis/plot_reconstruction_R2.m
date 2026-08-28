@@ -93,7 +93,7 @@ plot_pooled_conditions_R2 = true;
 pooled_r2_file_name = sprintf('%s_sum_all_conditions_reconstruction_R2.mat', data_content);
 
 % Save switches
-save_fig = true;
+save_fig = false;
 save_png = true;
 close_after_save = true;
 

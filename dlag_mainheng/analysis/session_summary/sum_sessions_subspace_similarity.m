@@ -84,7 +84,7 @@ save_figure = true;
 save_mat = true;
 
 figure_visible = 'on';
-close_after_save = false;
+close_after_save = true;
 
 % The first two rows preserve the original Group 1 / Group 2 colors.
 % If group_names contains additional groups, distinct extra colors are added
