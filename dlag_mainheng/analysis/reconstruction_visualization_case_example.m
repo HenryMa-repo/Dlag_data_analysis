@@ -4,14 +4,19 @@
 % The loading, trial sorting, condition grouping, condition labels, and
 % local/global neuron indexing follow reconstruction_visualization.m.
 %
-% One figure is created for each neural group. Each figure contains:
-%   rows    = three user-specified local neuron IDs
-%   columns = Original, Within-area, Across-area, Feedforward, Feedback
+% One heatmap figure is created for each neural group. Each figure contains:
+%   rows    = all entries in analysis_fields, in the specified order
+%   columns = two user-specified local neuron IDs
 %
-% The 15 panels within one group share one color scale. Color scales are not
+% All panels within one group share one color scale. Color scales are not
 % shared across groups. Condition labels and the "Condition / Trial" axis
-% label appear only in the upper-left panel. The time-axis scale appears
-% only in the third-row, third-column panel.
+% label appear only in the upper-left panel. Each reconstruction label is
+% drawn once, to the left of the first-neuron column. The time axis appears
+% only in the first-neuron panel for the last reconstruction.
+%
+% In addition, for the first selected neuron in each group, one trial-average
+% figure is created for each condition. Each such figure contains one panel
+% per analysis field and uses a common y scale across all of its panels.
 
 clc;
 clear;
@@ -37,6 +42,11 @@ data_condition = [];
 
 runIdx = 1;
 
+% Width of one time bin. For raw_count models, all original and reconstructed
+% values are multiplied by 1000/bin_width_ms for display in spikes/s (Hz).
+% The value is checked against saved bin_size/bin_centers metadata.
+bin_width_ms = 20;
+
 % Display/file labels only. Their order must follow the DLAG model-group
 % order. These names do not affect neuron selection and are not compared
 % with any stored group or area names.
@@ -47,29 +57,33 @@ group_names = {'V1', 'MT'};
 dat_file = fullfile('.', 'model_data_allruns');
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
-% Three LOCAL neuron IDs for each group. Replace these example values with
+% Two LOCAL neuron IDs for each group. Replace these example values with
 % the neuron IDs to be shown. The cell order is group 1, group 2, ... .
 case_neuron_ids = { ...
-    [31 10 52], ...  % Group 1
-    [20 83 112]  ...  % Group 2
+    [125 173], ...  % Group 1 
+    [36 165]  ...  % Group 2
     };
 
-% Fixed column order for the case-example figure.
+% Row order for the heatmap and panel order for trial-average figures.
+% Any positive number of fields is supported, provided each field exists in
+% seqEst and reconstruction_labels contains the same number of entries.
 analysis_fields = { ...
     'y', ...
-    'yRecon_use_within', ...
+    'yRecon_use_all', ...
     'yRecon_use_across', ...
+    'yRecon_use_within', ...
     'yRecon_use_feedforward', ...
     'yRecon_use_feedback'};
 
-column_labels = { ...
+reconstruction_labels = { ...
     'Original', ...
-    'Within-area', ...
+    'All latents', ...
     'Across-area', ...
+    'Within-area', ...
     'Feedforward', ...
     'Feedback'};
 
-% Heatmap color scale. All 15 panels in a group share the percentile-based
+% Heatmap color scale. All panels in a group share the percentile-based
 % limits below. Each group is scaled independently.
 color_percentiles = [1 99];
 
@@ -81,25 +95,41 @@ colormap_name = 'parula';
 
 % Figure style.
 figure_visible = 'on';
-figure_width = 1800;
-figure_height = 760;
+figure_width = 1000;
+% Total heatmap height is calculated as this value times the number of
+% analysis fields. The default 250 reproduces a height of 1250 for 5 rows
+% and gives a height of 1500 for the current 6 rows.
+heatmap_row_height_pixels = 250;
 font_name = 'Arial';
 axis_font_size = 9;
-column_font_size = 11;
-row_font_size = 10;
+unit_font_size = 11;
+reconstruction_font_size = 10;
 
-% Show the time-axis label, ticks, and outward tick marks in one panel only.
-% With the required 3-by-5 layout, [3 3] is the bottom Across-area panel.
-time_axis_panel = [3 3];  % [row, column]
+% Main heatmap layout. The two neuron columns are separated by an explicit
+% normalized figure-width gap. Reconstruction labels are figure-level text
+% boxes and are drawn only once, to the left of the first neuron column.
+layout_outer_position = [0.23 0.065 0.68 0.875];
+unit_column_gap = 0.055;
+reconstruction_row_gap = 0.012;
+reconstruction_label_right = 0.100;
+reconstruction_label_width = 0.095;
+colorbar_position = [0.935 0.065 0.018 0.875];
 
-% Layout controls. Neuron labels are figure-level text boxes so that all
-% three labels share exactly the same right edge, regardless of the
-% condition tick labels shown in the upper-left panel.
-layout_outer_position = [0.075 0.045 0.915 0.945];
-neuron_label_right = 0.062;
-neuron_label_width = 0.058;
+% Trial-average figures: first selected neuron of each group, one figure per
+% condition, with one panel per analysis field in a single row. Total figure
+% width is calculated from trial_average_panel_width_pixels times the number
+% of analysis fields.
+plot_trial_average = true;
+trial_average_error = 'sem';  % 'sem', 'std', or 'none'
+trial_average_subfolder = 'trial_average_first_unit';
+trial_average_panel_width_pixels = 330;
+trial_average_figure_height = 360;
+trial_average_line_width = 1.5;
+trial_average_shade_color = [0.72 0.72 0.72];
+trial_average_shade_alpha = 0.45;
+trial_average_y_padding_fraction = 0.06;
 
-% Save switches. FIG and SVG are enabled for later vector-graphics editing.
+% Save switches. SVG is enabled by default for vector-graphics editing.
 save_fig = false;
 save_svg = true;
 save_png = false;
@@ -116,14 +146,38 @@ if isempty(scriptDir)
 end
 
 analysis_fields = normalizeFieldListLocal(analysis_fields);
-column_labels = normalizeLabelListLocal(column_labels);
+reconstruction_labels = normalizeLabelListLocal(reconstruction_labels);
 group_names = normalizeGroupNamesLocal(group_names);
 [group_display_names, group_file_tags] = ...
     buildGroupLabelsLocal(group_names);
 
-if numel(analysis_fields) ~= numel(column_labels)
-    error('analysis_fields and column_labels must have the same length.');
+if numel(analysis_fields) ~= numel(reconstruction_labels)
+    error(['analysis_fields and reconstruction_labels must have the ', ...
+        'same length.']);
 end
+
+n_analysis_fields = numel(analysis_fields);
+
+validateattributes(heatmap_row_height_pixels, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'positive'}, ...
+    mfilename, 'heatmap_row_height_pixels');
+validateattributes(trial_average_panel_width_pixels, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'positive'}, ...
+    mfilename, 'trial_average_panel_width_pixels');
+
+% Preserve approximately the same physical panel size as fields are added
+% or removed. No plotting-function edits are needed when the list changes.
+figure_height = round(heatmap_row_height_pixels .* n_analysis_fields);
+trial_average_figure_width = round( ...
+    trial_average_panel_width_pixels .* n_analysis_fields);
+
+validateattributes(bin_width_ms, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'positive'}, ...
+    mfilename, 'bin_width_ms');
+
+trial_average_error = validatestring( ...
+    lower(char(string(trial_average_error))), ...
+    {'sem', 'std', 'none'}, mfilename, 'trial_average_error');
 
 if isempty(data_condition)
     use_condition_mode = false;
@@ -163,6 +217,9 @@ end
 
 condition_full = this_run.conditions_full;
 condition_index_per_trial_full = this_run.condition_index_per_trial_full(:);
+
+[response_scale_factor, response_axis_label] = ...
+    getResponseDisplayInfoLocal(data_content, bin_width_ms, this_run);
 
 %% ------------------------------------------------------------------------
 % Load model data and organize trials into condition blocks
@@ -233,15 +290,28 @@ validateGroupNameCountLocal(group_names, numGroups);
 case_neuron_ids = validateCaseNeuronIdsLocal( ...
     case_neuron_ids, yDims, numGroups);
 
-fprintf('\nFields and columns:\n');
+fprintf('\nFields and reconstruction labels:\n');
 for f = 1:numel(analysis_fields)
-    fprintf('  %-28s -> %s\n', analysis_fields{f}, column_labels{f});
+    fprintf('  %-28s -> %s\n', ...
+        analysis_fields{f}, reconstruction_labels{f});
 end
+fprintf('Number of analysis fields: %d\n', n_analysis_fields);
+fprintf('Display response label: %s\n', response_axis_label);
+fprintf('Bin width: %g ms\n', bin_width_ms);
 fprintf('Output folder: %s\n', saveDir);
 
 %% ------------------------------------------------------------------------
-% Plot one 3-by-5 case-example figure per group
+% Plot one N-field-by-2 heatmap per group and condition-average figures
 % -------------------------------------------------------------------------
+
+if plot_trial_average && (save_fig || save_svg || save_png)
+    trialAverageSaveDir = fullfile(saveDir, trial_average_subfolder);
+    if ~isfolder(trialAverageSaveDir)
+        mkdir(trialAverageSaveDir);
+    end
+else
+    trialAverageSaveDir = saveDir;
+end
 
 for groupIdx = 1:numGroups
     selectedLocalNeuronIds = case_neuron_ids{groupIdx};
@@ -255,6 +325,7 @@ for groupIdx = 1:numGroups
 
     allVals = collectValuesForColorLimitLocal( ...
         dataBlocks, analysis_fields, selectedGlobalRows);
+    allVals = allVals .* response_scale_factor;
     climVals = robustColorLimitsLocal(allVals, color_percentiles);
 
     fprintf('%s shared color limit across all panels: [%g, %g]\n', ...
@@ -266,13 +337,16 @@ for groupIdx = 1:numGroups
         data_content, modeTag, group_file_tags{groupIdx}, nNeurons);
 
     fig = plotCaseExampleGroupLocal( ...
-        dataBlocks, analysis_fields, column_labels, ...
+        dataBlocks, analysis_fields, reconstruction_labels, ...
         selectedGlobalRows, selectedLocalNeuronIds, figureName, this_run, ...
-        climVals, condition_gap_rows, draw_condition_boxes, ...
+        climVals, response_scale_factor, response_axis_label, bin_width_ms, ...
+        condition_gap_rows, draw_condition_boxes, ...
         draw_condition_separators, colormap_name, figure_visible, ...
         figure_width, figure_height, font_name, axis_font_size, ...
-        column_font_size, row_font_size, time_axis_panel, ...
-        layout_outer_position, neuron_label_right, neuron_label_width);
+        unit_font_size, reconstruction_font_size, ...
+        layout_outer_position, unit_column_gap, reconstruction_row_gap, ...
+        reconstruction_label_right, reconstruction_label_width, ...
+        colorbar_position);
 
     fileBase = sanitizeFileNameLocal(figureName);
 
@@ -296,6 +370,20 @@ for groupIdx = 1:numGroups
 
     if close_after_save
         close(fig);
+    end
+
+    if plot_trial_average
+        plotAndSaveTrialAveragesLocal( ...
+            dataBlocks, analysis_fields, reconstruction_labels, ...
+            selectedGlobalRows(1), selectedLocalNeuronIds(1), ...
+            group_file_tags{groupIdx}, data_content, modeTag, this_run, ...
+            response_scale_factor, response_axis_label, bin_width_ms, ...
+            trial_average_error, figure_visible, ...
+            trial_average_figure_width, trial_average_figure_height, ...
+            font_name, axis_font_size, trial_average_line_width, ...
+            trial_average_shade_color, trial_average_shade_alpha, ...
+            trial_average_y_padding_fraction, trialAverageSaveDir, ...
+            save_fig, save_svg, save_png, png_dpi, close_after_save);
     end
 end
 
@@ -346,11 +434,13 @@ function labels = normalizeLabelListLocal(labels)
                 labels{i} = char(labels{i});
             end
             if ~ischar(labels{i})
-                error('column_labels{%d} must be a char or string.', i);
+                error(['reconstruction_labels{%d} must be a char or ', ...
+                    'string.'], i);
             end
         end
     else
-        error('column_labels must be a char, string array, or cell array.');
+        error(['reconstruction_labels must be a char, string array, ', ...
+            'or cell array.']);
     end
 
     labels = reshape(labels, 1, []);
@@ -373,8 +463,8 @@ function ids = validateCaseNeuronIdsLocal(ids, yDims, numGroups)
         end
 
         thisIds = double(reshape(thisIds, 1, []));
-        if numel(thisIds) ~= 3
-            error(['case_neuron_ids{%d} must contain exactly three local ', ...
+        if numel(thisIds) ~= 2
+            error(['case_neuron_ids{%d} must contain exactly two local ', ...
                 'neuron IDs.'], g);
         end
         if any(~isfinite(thisIds)) || any(thisIds ~= round(thisIds)) || ...
@@ -654,37 +744,107 @@ function q = percentileLocal(x, p)
     end
 end
 
+function [scaleFactor, axisLabel] = getResponseDisplayInfoLocal( ...
+    dataContent, binWidthMs, runMeta)
+
+    dataContent = lower(strtrim(char(string(dataContent))));
+
+    if strcmp(dataContent, 'raw_count')
+        checkBinWidthAgainstMetadataLocal(binWidthMs, runMeta);
+        scaleFactor = 1000 ./ binWidthMs;
+        axisLabel = 'Firing rate (Hz)';
+    elseif strcmp(dataContent, 'raw_fr')
+        checkBinWidthAgainstMetadataLocal(binWidthMs, runMeta);
+        scaleFactor = 1;
+        axisLabel = 'Firing rate (Hz)';
+    else
+        scaleFactor = 1;
+        axisLabel = 'Response';
+        warning(['data_content is %s rather than raw_count/raw_fr. ', ...
+            'Response values will not be converted to firing rate.'], ...
+            dataContent);
+    end
+end
+
+function checkBinWidthAgainstMetadataLocal(binWidthMs, runMeta)
+    savedBinWidthMs = [];
+
+    if isfield(runMeta, 'bin_size') && ...
+            isnumeric(runMeta.bin_size) && isscalar(runMeta.bin_size) && ...
+            isfinite(runMeta.bin_size) && runMeta.bin_size > 0
+        savedBinWidthMs = double(runMeta.bin_size) .* 1000;
+    elseif isfield(runMeta, 'bin_centers') && ...
+            isnumeric(runMeta.bin_centers) && ...
+            numel(runMeta.bin_centers) >= 2
+        centerDiffMs = diff(double(runMeta.bin_centers(:)')) .* 1000;
+        centerDiffMs = centerDiffMs(isfinite(centerDiffMs) & centerDiffMs > 0);
+        if ~isempty(centerDiffMs)
+            savedBinWidthMs = median(centerDiffMs);
+        end
+    end
+
+    if isempty(savedBinWidthMs)
+        warning(['No valid saved bin_size/bin_centers metadata was found. ', ...
+            'Using bin_width_ms = %g.'], binWidthMs);
+        return;
+    end
+
+    tol = max(1e-6, 1e-6 .* max(abs([binWidthMs, savedBinWidthMs])));
+    if abs(binWidthMs - savedBinWidthMs) > tol
+        error(['bin_width_ms is %g ms, but the saved metadata indicates ', ...
+            '%g ms. Correct bin_width_ms before converting counts to Hz.'], ...
+            binWidthMs, savedBinWidthMs);
+    end
+end
+
 function fig = plotCaseExampleGroupLocal( ...
-    dataBlocks, analysisFields, columnLabels, ...
+    dataBlocks, analysisFields, reconstructionLabels, ...
     selectedGlobalRows, selectedLocalNeuronIds, figureName, runMeta, ...
-    climVals, conditionGapRows, drawConditionBoxes, ...
+    climVals, responseScaleFactor, responseAxisLabel, binWidthMs, ...
+    conditionGapRows, drawConditionBoxes, ...
     drawConditionSeparators, colormapName, figureVisible, ...
     figureWidth, figureHeight, fontName, axisFontSize, ...
-    columnFontSize, rowFontSize, timeAxisPanel, ...
-    layoutOuterPosition, neuronLabelRight, neuronLabelWidth)
+    unitFontSize, reconstructionFontSize, ...
+    layoutOuterPosition, unitColumnGap, reconstructionRowGap, ...
+    reconstructionLabelRight, reconstructionLabelWidth, ...
+    colorbarPosition)
 
     nNeurons = numel(selectedGlobalRows);
     nFields = numel(analysisFields);
 
-    validateattributes(timeAxisPanel, {'numeric'}, ...
-        {'vector', 'numel', 2, 'integer', 'positive', 'finite'}, ...
-        mfilename, 'time_axis_panel');
-    timeAxisPanel = reshape(timeAxisPanel, 1, []);
-    if timeAxisPanel(1) > nNeurons || timeAxisPanel(2) > nFields
-        error(['time_axis_panel = [%d %d] is outside the %d-by-%d ', ...
-            'panel layout.'], timeAxisPanel(1), timeAxisPanel(2), ...
-            nNeurons, nFields);
+    if nNeurons ~= 2
+        error('The heatmap layout requires exactly two selected neurons.');
     end
 
     validateattributes(layoutOuterPosition, {'numeric'}, ...
-        {'vector', 'numel', 4, 'finite'}, ...
+        {'vector', 'numel', 4, 'real', 'finite'}, ...
         mfilename, 'layout_outer_position');
-    validateattributes(neuronLabelRight, {'numeric'}, ...
+    validateattributes(unitColumnGap, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'nonnegative'}, ...
+        mfilename, 'unit_column_gap');
+    validateattributes(reconstructionRowGap, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'nonnegative'}, ...
+        mfilename, 'reconstruction_row_gap');
+    validateattributes(reconstructionLabelRight, {'numeric'}, ...
         {'scalar', 'finite', '>', 0, '<', 1}, ...
-        mfilename, 'neuron_label_right');
-    validateattributes(neuronLabelWidth, {'numeric'}, ...
-        {'scalar', 'finite', 'positive', '<', neuronLabelRight}, ...
-        mfilename, 'neuron_label_width');
+        mfilename, 'reconstruction_label_right');
+    validateattributes(reconstructionLabelWidth, {'numeric'}, ...
+        {'scalar', 'finite', 'positive', '<', reconstructionLabelRight}, ...
+        mfilename, 'reconstruction_label_width');
+    validateattributes(colorbarPosition, {'numeric'}, ...
+        {'vector', 'numel', 4, 'real', 'finite'}, ...
+        mfilename, 'colorbar_position');
+
+    plotWidth = layoutOuterPosition(3);
+    plotHeight = layoutOuterPosition(4);
+    columnWidth = (plotWidth - unitColumnGap) / nNeurons;
+    rowHeight = ...
+        (plotHeight - (nFields - 1) * reconstructionRowGap) / nFields;
+
+    if columnWidth <= 0 || rowHeight <= 0
+        error(['Main heatmap layout has non-positive panel dimensions. ', ...
+            'Reduce unit_column_gap or reconstruction_row_gap.']);
+    end
 
     fig = figure( ...
         'Name', figureName, ...
@@ -697,36 +857,33 @@ function fig = plotCaseExampleGroupLocal( ...
         'DefaultAxesFontName', fontName, ...
         'DefaultTextFontName', fontName);
 
-    t = tiledlayout(fig, nNeurons, nFields, ...
-        'TileSpacing', 'compact', ...
-        'Padding', 'compact');
-    try
-        t.TileSpacing = 'tight';
-    catch
-        % Older MATLAB releases use the compact spacing set above.
-    end
-    try
-        t.OuterPosition = layoutOuterPosition;
-    catch
-        warning(['Could not apply layout_outer_position; using the ', ...
-            'default tiled-layout position.']);
-    end
-
     lastAx = [];
-    axesGrid = gobjects(nNeurons, nFields);
+    axesGrid = gobjects(nFields, nNeurons);
+    requestedPositions = nan(nFields, nNeurons, 4);
 
-    for n = 1:nNeurons
-        for f = 1:nFields
+    for f = 1:nFields
+        for n = 1:nNeurons
             fieldName = analysisFields{f};
-            ax = nexttile(t, (n - 1) * nFields + f);
-            axesGrid(n, f) = ax;
+
+            panelLeft = layoutOuterPosition(1) + ...
+                (n - 1) * (columnWidth + unitColumnGap);
+            panelBottom = layoutOuterPosition(2) + ...
+                (nFields - f) * (rowHeight + reconstructionRowGap);
+            panelPosition = ...
+                [panelLeft, panelBottom, columnWidth, rowHeight];
+
+            ax = axes(fig, 'Position', panelPosition); %#ok<LAXES>
+            axesGrid(f, n) = ax;
+            requestedPositions(f, n, :) = panelPosition;
             lastAx = ax;
 
             [M, blockInfo] = buildNeuronHeatmapMatrixLocal( ...
                 dataBlocks, fieldName, selectedGlobalRows(n), ...
                 conditionGapRows);
+            M = M .* responseScaleFactor;
 
-            [xValues, xLabelText] = getTimeAxisLocal(runMeta, size(M, 2));
+            [xValues, xLabelText] = ...
+                getTimeAxisLocal(runMeta, size(M, 2), binWidthMs);
             xEdges = estimateXEdgesLocal(xValues);
 
             h = imagesc(ax, xValues, 1:size(M, 1), M);
@@ -747,16 +904,17 @@ function fig = plotCaseExampleGroupLocal( ...
             xlim(ax, [xEdges(1), xEdges(end)]);
             ylim(ax, [0.5, size(M, 1) + 0.5]);
 
-            if n == 1
-                title(ax, columnLabels{f}, ...
+            % Unit labels appear once, above the two columns.
+            if f == 1
+                title(ax, sprintf('Neuron %d', selectedLocalNeuronIds(n)), ...
                     'Interpreter', 'none', ...
                     'FontName', fontName, ...
-                    'FontSize', columnFontSize, ...
+                    'FontSize', unitFontSize, ...
                     'FontWeight', 'normal');
             end
 
-            showTimeAxis = ...
-                n == timeAxisPanel(1) && f == timeAxisPanel(2);
+            % Show time only for first neuron and last reconstruction.
+            showTimeAxis = n == 1 && f == nFields;
 
             if showTimeAxis
                 xlabel(ax, xLabelText, ...
@@ -772,9 +930,9 @@ function fig = plotCaseExampleGroupLocal( ...
                     'XColor', 'none');
             end
 
-            % Show condition labels and their axis meaning in the
-            % upper-left panel only.
-            if n == 1 && f == 1
+            % Show condition labels and their axis meaning only in the
+            % upper-left panel (Original x first neuron).
+            if f == 1 && n == 1
                 set(ax, ...
                     'YTick', [blockInfo.centerRow], ...
                     'YTickLabel', {blockInfo.label}, ...
@@ -797,37 +955,41 @@ function fig = plotCaseExampleGroupLocal( ...
         end
     end
 
-    % No tiled-layout title: the requested figure has column headings only.
+    % Add one shared colorbar without allowing it to resize only one panel.
     if ~isempty(lastAx) && isgraphics(lastAx)
         cb = colorbar(lastAx);
-        try
-            cb.Layout.Tile = 'east';
-        catch
-            % Older MATLAB releases keep the colorbar beside lastAx.
-        end
-        cb.Label.String = 'Response';
+        cb.Position = colorbarPosition;
+        cb.Label.String = responseAxisLabel;
         cb.Label.Interpreter = 'none';
         cb.FontName = fontName;
         cb.FontSize = axisFontSize;
         cb.TickDirection = 'out';
     end
 
-    % Add neuron IDs only after the tiled layout and colorbar have reached
-    % their final positions. Figure-level annotations keep all IDs aligned.
+    % Colorbar creation can resize its peer axis. Restore every requested
+    % panel position and then add all row labels once beside column 1.
     drawnow;
-    addAlignedNeuronLabelsLocal( ...
-        fig, axesGrid(:, 1), selectedLocalNeuronIds, ...
-        neuronLabelRight, neuronLabelWidth, fontName, rowFontSize);
+    for f = 1:nFields
+        for n = 1:nNeurons
+            axesGrid(f, n).Position = ...
+                reshape(requestedPositions(f, n, :), 1, 4);
+        end
+    end
+
+    addAlignedReconstructionLabelsLocal( ...
+        fig, axesGrid(:, 1), reconstructionLabels, ...
+        reconstructionLabelRight, reconstructionLabelWidth, ...
+        fontName, reconstructionFontSize);
 end
 
-function addAlignedNeuronLabelsLocal( ...
-    fig, firstColumnAxes, neuronIds, labelRight, labelWidth, ...
+function addAlignedReconstructionLabelsLocal( ...
+    fig, firstNeuronAxes, reconstructionLabels, labelRight, labelWidth, ...
     fontName, fontSize)
 
     labelLeft = labelRight - labelWidth;
 
-    for n = 1:numel(firstColumnAxes)
-        ax = firstColumnAxes(n);
+    for f = 1:numel(firstNeuronAxes)
+        ax = firstNeuronAxes(f);
         oldUnits = ax.Units;
         ax.Units = 'normalized';
         axPos = ax.Position;
@@ -838,7 +1000,7 @@ function addAlignedNeuronLabelsLocal( ...
 
         annotation(fig, 'textbox', ...
             [labelLeft, labelBottom, labelWidth, labelHeight], ...
-            'String', sprintf('Neuron %d', neuronIds(n)), ...
+            'String', reconstructionLabels{f}, ...
             'Interpreter', 'none', ...
             'FontName', fontName, ...
             'FontSize', fontSize, ...
@@ -849,6 +1011,294 @@ function addAlignedNeuronLabelsLocal( ...
             'Margin', 0, ...
             'FitBoxToText', 'off');
     end
+end
+
+function plotAndSaveTrialAveragesLocal( ...
+    dataBlocks, analysisFields, reconstructionLabels, ...
+    neuronRow, localNeuronId, groupFileTag, dataContent, modeTag, runMeta, ...
+    responseScaleFactor, responseAxisLabel, binWidthMs, errorMode, ...
+    figureVisible, figureWidth, figureHeight, fontName, axisFontSize, ...
+    meanLineWidth, shadeColor, shadeAlpha, yPaddingFraction, saveDir, ...
+    saveFig, saveSvg, savePng, pngDpi, closeAfterSave)
+
+    nonEmptyBlocks = find(arrayfun(@(b) ~isempty(b.seqEst), dataBlocks));
+    if isempty(nonEmptyBlocks)
+        warning('No non-empty conditions are available for trial-average plots.');
+        return;
+    end
+
+    if numel(nonEmptyBlocks) ~= 16
+        warning(['Expected 16 non-empty conditions for trial-average plots, ', ...
+            'but found %d. One figure will be made for each available ', ...
+            'condition.'], numel(nonEmptyBlocks));
+    end
+
+    fprintf(['Creating %d trial-average figures for %s, local neuron %d ', ...
+        '(error = %s).\n'], ...
+        numel(nonEmptyBlocks), groupFileTag, localNeuronId, errorMode);
+
+    for ii = 1:numel(nonEmptyBlocks)
+        b = nonEmptyBlocks(ii);
+        block = dataBlocks(b);
+
+        [meanCurves, errorCurves] = buildTrialAverageCurvesLocal( ...
+            block.seqEst, analysisFields, neuronRow, ...
+            responseScaleFactor, errorMode);
+
+        [xValues, xLabelText] = ...
+            getTimeAxisLocal(runMeta, size(meanCurves, 2), binWidthMs);
+
+        conditionId = block.conditionId;
+        conditionLabel = char(string(block.label));
+        figureName = sprintf( ...
+            '%s_trial_average_%s_%s_neuron%d_condition%02d_%s_%s', ...
+            dataContent, modeTag, groupFileTag, localNeuronId, ...
+            conditionId, conditionLabel, errorMode);
+
+        fig = plotTrialAverageConditionLocal( ...
+            meanCurves, errorCurves, xValues, xLabelText, ...
+            reconstructionLabels, conditionLabel, figureName, ...
+            responseAxisLabel, errorMode, figureVisible, ...
+            figureWidth, figureHeight, fontName, axisFontSize, ...
+            meanLineWidth, shadeColor, shadeAlpha, yPaddingFraction);
+
+        fileBase = sanitizeFileNameLocal(figureName);
+
+        if saveFig
+            figFile = fullfile(saveDir, [fileBase, '.fig']);
+            saveFigLocal(fig, figFile);
+            fprintf('Saved FIG: %s\n', figFile);
+        end
+
+        if saveSvg
+            svgFile = fullfile(saveDir, [fileBase, '.svg']);
+            saveSvgLocal(fig, svgFile);
+            fprintf('Saved SVG: %s\n', svgFile);
+        end
+
+        if savePng
+            pngFile = fullfile(saveDir, [fileBase, '.png']);
+            savePngLocal(fig, pngFile, pngDpi);
+            fprintf('Saved PNG: %s\n', pngFile);
+        end
+
+        if closeAfterSave
+            close(fig);
+        end
+    end
+end
+
+function [meanCurves, errorCurves] = buildTrialAverageCurvesLocal( ...
+    seqEst, analysisFields, neuronRow, responseScaleFactor, errorMode)
+
+    if isempty(seqEst)
+        error('Cannot compute trial averages from an empty seqEst.');
+    end
+
+    nFields = numel(analysisFields);
+    Tref = [];
+    meanCurves = [];
+    errorCurves = [];
+
+    for f = 1:nFields
+        fieldName = analysisFields{f};
+        checkSeqFieldLocal(seqEst, fieldName, neuronRow);
+
+        nTrials = numel(seqEst);
+        T = size(seqEst(1).(fieldName), 2);
+
+        if isempty(Tref)
+            Tref = T;
+            meanCurves = nan(nFields, Tref);
+            errorCurves = nan(nFields, Tref);
+        elseif T ~= Tref
+            error(['Time length mismatch across fields while computing ', ...
+                'trial-average curves.']);
+        end
+
+        trialMatrix = nan(nTrials, Tref);
+        for tr = 1:nTrials
+            Y = double(seqEst(tr).(fieldName));
+            if size(Y, 2) ~= Tref
+                error('Time length mismatch in seqEst(%d).%s.', tr, fieldName);
+            end
+            trialMatrix(tr, :) = ...
+                Y(neuronRow, :) .* responseScaleFactor;
+        end
+
+        [mu, sd, nFinite] = finiteMeanStdLocal(trialMatrix);
+        meanCurves(f, :) = mu;
+
+        switch errorMode
+            case 'sem'
+                errorCurves(f, :) = sd ./ sqrt(nFinite);
+                errorCurves(f, nFinite < 2) = NaN;
+            case 'std'
+                errorCurves(f, :) = sd;
+            case 'none'
+                errorCurves(f, :) = zeros(1, Tref);
+            otherwise
+                error('Unsupported trial-average error mode: %s', errorMode);
+        end
+    end
+end
+
+function [mu, sd, nFinite] = finiteMeanStdLocal(X)
+    finiteMask = isfinite(X);
+    nFinite = sum(finiteMask, 1);
+
+    Xsum = X;
+    Xsum(~finiteMask) = 0;
+    mu = sum(Xsum, 1) ./ nFinite;
+    mu(nFinite == 0) = NaN;
+
+    centered = bsxfun(@minus, X, mu);
+    centered(~finiteMask) = 0;
+    denom = max(nFinite - 1, 1);
+    sd = sqrt(sum(centered .^ 2, 1) ./ denom);
+    sd(nFinite < 2) = NaN;
+end
+
+function fig = plotTrialAverageConditionLocal( ...
+    meanCurves, errorCurves, xValues, xLabelText, ...
+    reconstructionLabels, conditionLabel, figureName, ...
+    responseAxisLabel, errorMode, figureVisible, ...
+    figureWidth, figureHeight, fontName, axisFontSize, ...
+    meanLineWidth, shadeColor, shadeAlpha, yPaddingFraction)
+
+    validateattributes(shadeColor, {'numeric'}, ...
+        {'vector', 'numel', 3, 'real', 'finite', '>=', 0, '<=', 1}, ...
+        mfilename, 'trial_average_shade_color');
+    validateattributes(shadeAlpha, {'numeric'}, ...
+        {'scalar', 'real', 'finite', '>=', 0, '<=', 1}, ...
+        mfilename, 'trial_average_shade_alpha');
+    validateattributes(yPaddingFraction, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'nonnegative'}, ...
+        mfilename, 'trial_average_y_padding_fraction');
+
+    nFields = size(meanCurves, 1);
+    if numel(reconstructionLabels) ~= nFields || ...
+            ~isequal(size(errorCurves), size(meanCurves))
+        error('Trial-average curve arrays and reconstruction labels disagree.');
+    end
+
+    lowerCurves = meanCurves - errorCurves;
+    upperCurves = meanCurves + errorCurves;
+    yLimits = sharedCurveYLimitsLocal( ...
+        meanCurves, lowerCurves, upperCurves, yPaddingFraction);
+    xEdges = estimateXEdgesLocal(xValues);
+
+    fig = figure( ...
+        'Name', figureName, ...
+        'NumberTitle', 'off', ...
+        'Color', 'w', ...
+        'Visible', figureVisible, ...
+        'Position', [100, 100, figureWidth, figureHeight]);
+
+    set(fig, ...
+        'DefaultAxesFontName', fontName, ...
+        'DefaultTextFontName', fontName);
+
+    t = tiledlayout(fig, 1, nFields, ...
+        'TileSpacing', 'compact', ...
+        'Padding', 'compact');
+
+    axesList = gobjects(1, nFields);
+
+    for f = 1:nFields
+        ax = nexttile(t, f);
+        axesList(f) = ax;
+        hold(ax, 'on');
+
+        mu = meanCurves(f, :);
+        err = errorCurves(f, :);
+
+        if ~strcmp(errorMode, 'none')
+            drawShadedErrorLocal( ...
+                ax, xValues, mu, err, shadeColor, shadeAlpha);
+        end
+
+        plot(ax, xValues, mu, '-', ...
+            'Color', [0 0 0], ...
+            'LineWidth', meanLineWidth, ...
+            'HandleVisibility', 'off');
+
+        xlim(ax, [xEdges(1), xEdges(end)]);
+        ylim(ax, yLimits);
+
+        title(ax, {conditionLabel; reconstructionLabels{f}}, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize + 1, ...
+            'FontWeight', 'normal');
+
+        if f > 1
+            set(ax, 'YTickLabel', {});
+        end
+
+        cleanAxisLocal(ax, fontName, axisFontSize);
+    end
+
+    try
+        xlabel(t, xLabelText, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+        ylabel(t, responseAxisLabel, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+    catch
+        xlabel(axesList(ceil(nFields / 2)), xLabelText, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+        ylabel(axesList(1), responseAxisLabel, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+    end
+end
+
+function drawShadedErrorLocal(ax, xValues, mu, err, shadeColor, shadeAlpha)
+    lowerBand = mu - err;
+    upperBand = mu + err;
+    valid = isfinite(xValues) & isfinite(lowerBand) & isfinite(upperBand);
+
+    if ~any(valid)
+        return;
+    end
+
+    xv = xValues(valid);
+    lo = lowerBand(valid);
+    hi = upperBand(valid);
+
+    fill(ax, [xv, fliplr(xv)], [lo, fliplr(hi)], shadeColor, ...
+        'FaceAlpha', shadeAlpha, ...
+        'EdgeColor', 'none', ...
+        'HandleVisibility', 'off');
+end
+
+function yLimits = sharedCurveYLimitsLocal( ...
+    meanCurves, lowerCurves, upperCurves, paddingFraction)
+
+    vals = [meanCurves(:); lowerCurves(:); upperCurves(:); 0];
+    vals = vals(isfinite(vals));
+
+    if isempty(vals)
+        error('No finite values found for trial-average y limits.');
+    end
+
+    lo = min(vals);
+    hi = max(vals);
+
+    if lo == hi
+        padValue = max(1, abs(lo) .* 0.05);
+    else
+        padValue = (hi - lo) .* paddingFraction;
+    end
+
+    yLimits = [lo - padValue, hi + padValue];
 end
 
 function [M, blockInfo] = buildNeuronHeatmapMatrixLocal( ...
@@ -945,15 +1395,21 @@ function drawConditionGuidesLocal( ...
     end
 end
 
-function [xValues, xLabelText] = getTimeAxisLocal(runMeta, T)
-    xValues = 1:T;
-    xLabelText = 'Time bin';
+function [xValues, xLabelText] = getTimeAxisLocal(runMeta, T, binWidthMs)
+    xLabelText = 'Time (ms)';
 
     if isfield(runMeta, 'bin_centers') && ...
             isnumeric(runMeta.bin_centers) && ...
             numel(runMeta.bin_centers) == T
-        xValues = double(runMeta.bin_centers(:)');
-        xLabelText = 'Time';
+        % bin_centers are stored in seconds by processing_to_count_and_fr.
+        xValues = double(runMeta.bin_centers(:)') .* 1000;
+    elseif isfield(runMeta, 'analysis_window') && ...
+            isnumeric(runMeta.analysis_window) && ...
+            numel(runMeta.analysis_window) == 2
+        startMs = double(runMeta.analysis_window(1)) .* 1000;
+        xValues = startMs + ((1:T) - 0.5) .* binWidthMs;
+    else
+        xValues = ((1:T) - 0.5) .* binWidthMs;
     end
 end
 
