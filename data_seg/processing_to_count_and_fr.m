@@ -34,6 +34,7 @@
 % .z_across_conditions
 % .demean_count_within_trial
 % .demean_fr_within_trial
+% .demean_count_within_t_and_condition
 % .demean_pooledsd_within_condition
 %
 % Notes:
@@ -481,6 +482,13 @@ function out = process_one_run(this_run_trials, this_run_metrics, analysis_windo
     demean_count_within_trial = demean_within_trial(raw_count);
     demean_fr_within_trial = demean_within_trial(raw_fr);
 
+    % For every unit and time bin, subtract the across-trial mean computed
+    % only from trials belonging to the same condition. This removes the
+    % condition-specific, stimulus-locked PSTH while retaining trial-to-trial
+    % residual fluctuations.
+    demean_count_within_t_and_condition = ...
+        demean_within_t_and_condition(raw_count, condition_index_per_trial);
+
     demean_pooledsd_within_condition_data = ...
         demean_pooledsd_within_condition(raw_count, condition_index_per_trial);
 
@@ -514,6 +522,8 @@ function out = process_one_run(this_run_trials, this_run_metrics, analysis_windo
 
     out.demean_count_within_trial = demean_count_within_trial;
     out.demean_fr_within_trial = demean_fr_within_trial;
+    out.demean_count_within_t_and_condition = ...
+        demean_count_within_t_and_condition;
     out.demean_pooledsd_within_condition = demean_pooledsd_within_condition_data;
 end
 
@@ -712,6 +722,57 @@ function Y = demean_within_trial(X)
             Y(u, t, :) = reshape(v, [1 1 nBin]);
 
         end
+    end
+end
+
+function Y = demean_within_t_and_condition(X, condition_index_per_trial)
+%% =========================================================================
+% demean_within_t_and_condition
+%
+% Purpose:
+% For each neuron, condition, and time bin, subtract the mean across trials
+% in that condition at that same time bin:
+%
+%   Y(unit, trial, bin) = X(unit, trial, bin) ...
+%       - mean(X(unit, trials_in_same_condition, bin), 2)
+%
+% This is the trial-by-trial residual after removal of the
+% condition-specific, stimulus-locked PSTH. It is different from
+% demean_within_trial, which subtracts each individual trial's mean across
+% time bins.
+%
+% Input/output array order:
+%   unit x trial x bin
+% =========================================================================
+
+    if ~isnumeric(X) || ndims(X) > 3
+        error('X must be a numeric unit x trial x bin array.');
+    end
+
+    nTrial = size(X, 2);
+    condition_index_per_trial = condition_index_per_trial(:);
+
+    if numel(condition_index_per_trial) ~= nTrial
+        error(['condition_index_per_trial length (%d) does not match the ', ...
+            'trial dimension of X (%d).'], ...
+            numel(condition_index_per_trial), nTrial);
+    end
+
+    if any(~isfinite(condition_index_per_trial)) || ...
+            any(condition_index_per_trial ~= round(condition_index_per_trial)) || ...
+            any(condition_index_per_trial < 1)
+        error(['condition_index_per_trial must contain one finite positive ', ...
+            'integer condition index for every trial.']);
+    end
+
+    Y = zeros(size(X), 'like', X);
+    cond_ids = unique(condition_index_per_trial(:))';
+
+    for c = cond_ids
+        trial_idx = find(condition_index_per_trial == c);
+        condition_time_mean = mean(X(:, trial_idx, :), 2);
+        Y(:, trial_idx, :) = bsxfun(@minus, ...
+            X(:, trial_idx, :), condition_time_mean);
     end
 end
 
