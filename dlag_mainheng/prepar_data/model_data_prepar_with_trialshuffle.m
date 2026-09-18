@@ -15,7 +15,7 @@
 % For each selected stim_tag:
 %   1) Select units from each probe using FR, FF, and d-prime, then retain
 %      requested areas and optionally apply an RF R2 threshold.
-%   2) Read eight data types from bined_data_allruns.
+%   2) Read nine data types from bined_data_allruns.
 %   3) Within each probe, stack selected areas in pick_area order. Every
 %      probe-area pair is one model group.
 %   4) Merge probes along the unit dimension for each trial.
@@ -95,9 +95,10 @@
 %       .z_across_conditions
 %       .demean_count_within_trial
 %       .demean_fr_within_trial
+%       .demean_count_within_t_and_condition
 %       .demean_pooledsd_within_condition
 %
-%   For each of the eight main data fields above, an additional field is
+%   For each of the nine main data fields above, an additional field is
 %   also stored:
 %       .<data_field>_by_condition
 %
@@ -120,6 +121,7 @@
 %       .z_across_conditions_nanmask
 %       .demean_count_within_trial_nanmask
 %       .demean_fr_within_trial_nanmask
+%       .demean_count_within_t_and_condition_nanmask
 %       .demean_pooledsd_within_condition_nanmask
 %
 %   If nan_trial_strategy == 4, each mask field also has:
@@ -209,6 +211,7 @@
 %       z_across_conditions
 %       demean_count_within_trial
 %       demean_fr_within_trial
+%       demean_count_within_t_and_condition
 %       demean_pooledsd_within_condition
 %
 %   If nan_trial_strategy == 4, each *_nanmask field follows the same
@@ -261,6 +264,9 @@
 %   shuffled outputs. RNG is initialized once by the group shuffle; the
 %   second-stage unit shuffle continues from the resulting RNG state. Thus
 %   adding the third output does not alter the first shuffled dataset.
+%   If the group-shuffled file already exists but the unit-independent file
+%   does not, RNG is initialized immediately before the new second stage;
+%   rng_continued_from_group_shuffle is then stored as false.
 %
 % Notes:
 %   1. All probe folders must belong to the same CatGT folder.
@@ -279,6 +285,12 @@
 %   7. groupd is retained from the original output schema, but each entry now
 %      represents one probe-area group rather than one whole probe. Its order
 %      matches group_name and group_probe exactly.
+%   8. Existing shuffled output files are never reshuffled. If either shuffled
+%      file already exists, its saved mappings are reused to add only
+%      demean_count_within_t_and_condition and its directly associated
+%      bookkeeping/by-condition fields. All pre-existing data fields and
+%      shuffle-info variables are retained unchanged. If the new residual is
+%      already present, it is left unchanged.
 % =========================================================================
 clc;
 clear;
@@ -455,47 +467,777 @@ end
 
 original_output_file = fullfile(catgt_folder, 'model_data_allruns.mat');
 save(original_output_file, 'model_data_allruns', '-v7.3');
+original_model_data_allruns = model_data_allruns;
+new_residual_field = 'demean_count_within_t_and_condition';
 
 fprintf('\nSaved original model data:\n');
 fprintf(' %s\n', original_output_file);
 
-%% ----------------------- Create and save trial-shuffled output -----------------------
-[model_data_allruns_shuffled, trial_shuffle_withincondition_info] = ...
-    make_trialshuffled_model_data_allruns( ...
-        model_data_allruns, original_output_file, ...
-        fullfile(catgt_folder, 'model_data_allruns_trialshuffled_withincondition.mat'), ...
-        trial_shuffle_random_seed);
+%% ----------------------- Create or incrementally update group shuffle -----------------------
+shuffle_output_file = fullfile(catgt_folder, ...
+    'model_data_allruns_trialshuffled_withincondition.mat');
+group_shuffle_created_now = false;
 
-model_data_allruns = model_data_allruns_shuffled;
-shuffle_output_file = trial_shuffle_withincondition_info.output_file;
-save(shuffle_output_file, 'model_data_allruns', 'trial_shuffle_withincondition_info', '-v7.3');
+if isfile(shuffle_output_file)
+    fprintf(['\nExisting group-shuffled file found. Reusing its saved ', ...
+        'shuffle mapping and preserving all old fields:\n %s\n'], ...
+        shuffle_output_file);
 
-fprintf('\nSaved trial-shuffled model data:\n');
-fprintf(' %s\n', shuffle_output_file);
+    loaded_group_shuffle = load(shuffle_output_file, ...
+        'model_data_allruns', 'trial_shuffle_withincondition_info');
+    require_loaded_shuffle_variables(loaded_group_shuffle, ...
+        {'model_data_allruns', 'trial_shuffle_withincondition_info'}, ...
+        shuffle_output_file);
 
-%% ----------------------- Create and save unit-independent shuffled output -----------------------
-[model_data_allruns_unit_independently_shuffled, ...
-        trial_shuffle_unit_independently_withincondition_info] = ...
-    make_unit_independently_trialshuffled_model_data_allruns( ...
-        model_data_allruns_shuffled, shuffle_output_file, ...
-        fullfile(catgt_folder, ...
-            'model_data_allruns_trialshuffled_unit_independently_withincondition.mat'), ...
-        trial_shuffle_random_seed);
+    trial_shuffle_withincondition_info = ...
+        loaded_group_shuffle.trial_shuffle_withincondition_info;
+    [model_data_allruns_shuffled, group_file_updated] = ...
+        add_new_field_to_existing_group_shuffle( ...
+        loaded_group_shuffle.model_data_allruns, ...
+        original_model_data_allruns, ...
+        trial_shuffle_withincondition_info, ...
+        new_residual_field, shuffle_output_file);
 
-model_data_allruns = model_data_allruns_unit_independently_shuffled;
-unit_independent_shuffle_output_file = ...
-    trial_shuffle_unit_independently_withincondition_info.output_file;
-save(unit_independent_shuffle_output_file, 'model_data_allruns', ...
-    'trial_shuffle_withincondition_info', ...
-    'trial_shuffle_unit_independently_withincondition_info', '-v7.3');
+    clear loaded_group_shuffle;
 
-fprintf('\nSaved unit-independently trial-shuffled model data:\n');
-fprintf(' %s\n', unit_independent_shuffle_output_file);
+    if group_file_updated
+        model_data_allruns = model_data_allruns_shuffled;
+        save(shuffle_output_file, 'model_data_allruns', '-append');
+        model_data_allruns = original_model_data_allruns;
+
+        fprintf(['Updated existing group-shuffled file by adding only ', ...
+            '%s-related fields:\n %s\n'], ...
+            new_residual_field, shuffle_output_file);
+    else
+        fprintf(['Existing group-shuffled file already contains %s. ', ...
+            'No data were overwritten.\n'], new_residual_field);
+    end
+else
+    [model_data_allruns_shuffled, trial_shuffle_withincondition_info] = ...
+        make_trialshuffled_model_data_allruns( ...
+            original_model_data_allruns, original_output_file, ...
+            shuffle_output_file, trial_shuffle_random_seed);
+
+    model_data_allruns = model_data_allruns_shuffled;
+    save(shuffle_output_file, 'model_data_allruns', ...
+        'trial_shuffle_withincondition_info', '-v7.3');
+    model_data_allruns = original_model_data_allruns;
+    group_shuffle_created_now = true;
+
+    fprintf('\nSaved new trial-shuffled model data:\n');
+    fprintf(' %s\n', shuffle_output_file);
+end
+
+%% ----------------------- Create or incrementally update unit shuffle -----------------------
+unit_independent_shuffle_output_file = fullfile(catgt_folder, ...
+    'model_data_allruns_trialshuffled_unit_independently_withincondition.mat');
+
+if isfile(unit_independent_shuffle_output_file)
+    fprintf(['\nExisting unit-independently shuffled file found. Reusing ', ...
+        'both saved shuffle stages and preserving all old fields:\n %s\n'], ...
+        unit_independent_shuffle_output_file);
+
+    % The stand-alone group-shuffled dataset is not needed for this branch;
+    % the unit-independent file contains its own saved first-stage mapping.
+    clear model_data_allruns_shuffled;
+
+    % The existing unit-independent file carries the exact first- and
+    % second-stage mappings that generated its old data. Use those mappings
+    % even if the stand-alone group-shuffled file was created separately.
+    loaded_unit_shuffle = load(unit_independent_shuffle_output_file, ...
+        'model_data_allruns', ...
+        'trial_shuffle_withincondition_info', ...
+        'trial_shuffle_unit_independently_withincondition_info');
+    require_loaded_shuffle_variables(loaded_unit_shuffle, ...
+        {'model_data_allruns', ...
+         'trial_shuffle_withincondition_info', ...
+         'trial_shuffle_unit_independently_withincondition_info'}, ...
+        unit_independent_shuffle_output_file);
+
+    [model_data_allruns_unit_independently_shuffled, unit_file_updated] = ...
+        add_new_field_to_existing_two_stage_shuffle( ...
+        loaded_unit_shuffle.model_data_allruns, ...
+        original_model_data_allruns, ...
+        loaded_unit_shuffle.trial_shuffle_withincondition_info, ...
+        loaded_unit_shuffle.trial_shuffle_unit_independently_withincondition_info, ...
+        new_residual_field, unit_independent_shuffle_output_file);
+
+    trial_shuffle_withincondition_info = ...
+        loaded_unit_shuffle.trial_shuffle_withincondition_info;
+    trial_shuffle_unit_independently_withincondition_info = ...
+        loaded_unit_shuffle.trial_shuffle_unit_independently_withincondition_info;
+    clear loaded_unit_shuffle;
+
+    if unit_file_updated
+        model_data_allruns = model_data_allruns_unit_independently_shuffled;
+        save(unit_independent_shuffle_output_file, ...
+            'model_data_allruns', '-append');
+        model_data_allruns = original_model_data_allruns;
+
+        fprintf(['Updated existing unit-independently shuffled file by ', ...
+            'adding only %s-related fields:\n %s\n'], ...
+            new_residual_field, unit_independent_shuffle_output_file);
+    else
+        fprintf(['Existing unit-independently shuffled file already ', ...
+            'contains %s. No data were overwritten.\n'], ...
+            new_residual_field);
+    end
+else
+    % If the group-shuffled file was loaded rather than generated in this
+    % run, initialize RNG here because no first-stage random draws occurred.
+    if ~group_shuffle_created_now
+        if isempty(trial_shuffle_random_seed)
+            rng('shuffle');
+        else
+            rng(trial_shuffle_random_seed);
+        end
+    end
+
+    [model_data_allruns_unit_independently_shuffled, ...
+            trial_shuffle_unit_independently_withincondition_info] = ...
+        make_unit_independently_trialshuffled_model_data_allruns( ...
+            model_data_allruns_shuffled, shuffle_output_file, ...
+            unit_independent_shuffle_output_file, ...
+            trial_shuffle_random_seed);
+
+    trial_shuffle_unit_independently_withincondition_info.rng_continued_from_group_shuffle = ...
+        group_shuffle_created_now;
+
+    model_data_allruns = model_data_allruns_unit_independently_shuffled;
+    save(unit_independent_shuffle_output_file, 'model_data_allruns', ...
+        'trial_shuffle_withincondition_info', ...
+        'trial_shuffle_unit_independently_withincondition_info', '-v7.3');
+
+    fprintf('\nSaved new unit-independently trial-shuffled model data:\n');
+    fprintf(' %s\n', unit_independent_shuffle_output_file);
+end
 
 
 fprintf('\nDone.\n');
 
 %% ======================= Local functions =======================
+
+function require_loaded_shuffle_variables(S, required_names, file_path)
+for k = 1:numel(required_names)
+    name = required_names{k};
+    if ~isfield(S, name)
+        error('Required variable %s is missing from existing shuffle file: %s', ...
+            name, file_path);
+    end
+end
+end
+
+function [existing_model_data, did_update] = ...
+        add_new_field_to_existing_group_shuffle( ...
+        existing_model_data, source_model_data, group_shuffle_info, ...
+        new_field, file_path)
+
+validate_existing_shuffle_dataset_compatible( ...
+    existing_model_data, source_model_data, new_field, file_path);
+validate_saved_shuffle_info(group_shuffle_info, numel(source_model_data), ...
+    'trial_shuffle_withincondition_info', file_path);
+
+did_update = false;
+
+for s = 1:numel(source_model_data)
+    source_run = source_model_data{s};
+    target_run = existing_model_data{s};
+
+    validate_new_field_matches_raw_count_layout(source_run, new_field, s);
+    [target_run, copied_bookkeeping] = ...
+        copy_new_field_bookkeeping_fields(target_run, source_run, new_field, s);
+    did_update = did_update || copied_bookkeeping;
+
+    group_shuffle = get_saved_group_shuffle_for_raw_count( ...
+        group_shuffle_info.runs{s}, s, file_path);
+    validate_saved_group_shuffle_matches_field( ...
+        group_shuffle, source_run, new_field, s, file_path);
+    validate_existing_group_raw_count_consistency( ...
+        target_run, source_run, group_shuffle, s, file_path);
+
+    by_condition_field = sprintf('%s_by_condition', new_field);
+    if ~isfield(target_run, new_field)
+        if isfield(target_run, by_condition_field)
+            error(['Existing shuffle file has %s but not %s in run %d. ', ...
+                'No fields were overwritten. Repair this partial entry first: %s'], ...
+                by_condition_field, new_field, s, file_path);
+        end
+
+        groupd = get_groupd_for_shuffle(source_run, new_field);
+        target_run.(new_field) = apply_shuffle_to_trial_struct_for_field( ...
+            source_run.(new_field), groupd, group_shuffle, new_field, s);
+        did_update = true;
+    else
+        validate_trial_struct_layout_equal( ...
+            target_run.(new_field), source_run.(new_field), ...
+            new_field, s, file_path);
+    end
+
+    if ~isfield(target_run, by_condition_field)
+        target_run.(by_condition_field) = build_by_condition_struct( ...
+            target_run.(new_field), target_run.conditions_full, ...
+            target_run.condition_index_per_trial_full);
+        did_update = true;
+    end
+
+    mask_field = sprintf('%s_nanmask', new_field);
+    mask_by_condition_field = sprintf('%s_by_condition', mask_field);
+    if isfield(source_run, mask_field)
+        if ~isfield(target_run, mask_field)
+            if isfield(target_run, mask_by_condition_field)
+                error(['Existing shuffle file has %s but not %s in run %d. ', ...
+                    'No fields were overwritten. Repair this partial entry first: %s'], ...
+                    mask_by_condition_field, mask_field, s, file_path);
+            end
+
+            mask_groupd = get_groupd_for_shuffle(source_run, mask_field);
+            target_run.(mask_field) = apply_shuffle_to_trial_struct_for_field( ...
+                source_run.(mask_field), mask_groupd, group_shuffle, ...
+                mask_field, s);
+            did_update = true;
+        else
+            validate_trial_struct_layout_equal( ...
+                target_run.(mask_field), source_run.(mask_field), ...
+                mask_field, s, file_path);
+        end
+
+        if ~isfield(target_run, mask_by_condition_field)
+            target_run.(mask_by_condition_field) = build_by_condition_struct( ...
+                target_run.(mask_field), target_run.conditions_full, ...
+                target_run.condition_index_per_trial_full);
+            did_update = true;
+        end
+    end
+
+    existing_model_data{s} = target_run;
+end
+end
+
+function [existing_model_data, did_update] = ...
+        add_new_field_to_existing_two_stage_shuffle( ...
+        existing_model_data, source_model_data, group_shuffle_info, ...
+        unit_shuffle_info, new_field, file_path)
+
+validate_existing_shuffle_dataset_compatible( ...
+    existing_model_data, source_model_data, new_field, file_path);
+validate_saved_shuffle_info(group_shuffle_info, numel(source_model_data), ...
+    'trial_shuffle_withincondition_info', file_path);
+validate_saved_shuffle_info(unit_shuffle_info, numel(source_model_data), ...
+    'trial_shuffle_unit_independently_withincondition_info', file_path);
+
+did_update = false;
+
+for s = 1:numel(source_model_data)
+    source_run = source_model_data{s};
+    target_run = existing_model_data{s};
+
+    validate_new_field_matches_raw_count_layout(source_run, new_field, s);
+    [target_run, copied_bookkeeping] = ...
+        copy_new_field_bookkeeping_fields(target_run, source_run, new_field, s);
+    did_update = did_update || copied_bookkeeping;
+
+    group_shuffle = get_saved_group_shuffle_for_raw_count( ...
+        group_shuffle_info.runs{s}, s, file_path);
+    unit_shuffle = get_saved_unit_shuffle_for_raw_count( ...
+        unit_shuffle_info.runs{s}, s, file_path);
+    validate_saved_group_shuffle_matches_field( ...
+        group_shuffle, source_run, new_field, s, file_path);
+    validate_saved_unit_shuffle_matches_field( ...
+        unit_shuffle, source_run, new_field, s, file_path);
+    validate_existing_two_stage_raw_count_consistency( ...
+        target_run, source_run, group_shuffle, unit_shuffle, s, file_path);
+
+    by_condition_field = sprintf('%s_by_condition', new_field);
+    if ~isfield(target_run, new_field)
+        if isfield(target_run, by_condition_field)
+            error(['Existing shuffle file has %s but not %s in run %d. ', ...
+                'No fields were overwritten. Repair this partial entry first: %s'], ...
+                by_condition_field, new_field, s, file_path);
+        end
+
+        groupd = get_groupd_for_shuffle(source_run, new_field);
+        group_shuffled = apply_shuffle_to_trial_struct_for_field( ...
+            source_run.(new_field), groupd, group_shuffle, new_field, s);
+        target_run.(new_field) = apply_unit_independent_shuffle_to_trial_struct( ...
+            group_shuffled, unit_shuffle, new_field, s);
+        did_update = true;
+    else
+        validate_trial_struct_layout_equal( ...
+            target_run.(new_field), source_run.(new_field), ...
+            new_field, s, file_path);
+    end
+
+    if ~isfield(target_run, by_condition_field)
+        target_run.(by_condition_field) = build_by_condition_struct( ...
+            target_run.(new_field), target_run.conditions_full, ...
+            target_run.condition_index_per_trial_full);
+        did_update = true;
+    end
+
+    mask_field = sprintf('%s_nanmask', new_field);
+    mask_by_condition_field = sprintf('%s_by_condition', mask_field);
+    if isfield(source_run, mask_field)
+        if ~isfield(target_run, mask_field)
+            if isfield(target_run, mask_by_condition_field)
+                error(['Existing shuffle file has %s but not %s in run %d. ', ...
+                    'No fields were overwritten. Repair this partial entry first: %s'], ...
+                    mask_by_condition_field, mask_field, s, file_path);
+            end
+
+            mask_groupd = get_groupd_for_shuffle(source_run, mask_field);
+            group_shuffled_mask = apply_shuffle_to_trial_struct_for_field( ...
+                source_run.(mask_field), mask_groupd, group_shuffle, ...
+                mask_field, s);
+            target_run.(mask_field) = ...
+                apply_unit_independent_shuffle_to_trial_struct( ...
+                group_shuffled_mask, unit_shuffle, mask_field, s);
+            did_update = true;
+        else
+            validate_trial_struct_layout_equal( ...
+                target_run.(mask_field), source_run.(mask_field), ...
+                mask_field, s, file_path);
+        end
+
+        if ~isfield(target_run, mask_by_condition_field)
+            target_run.(mask_by_condition_field) = build_by_condition_struct( ...
+                target_run.(mask_field), target_run.conditions_full, ...
+                target_run.condition_index_per_trial_full);
+            did_update = true;
+        end
+    end
+
+    existing_model_data{s} = target_run;
+end
+end
+
+function validate_existing_shuffle_dataset_compatible( ...
+        existing_model_data, source_model_data, new_field, file_path)
+
+if ~iscell(existing_model_data) || ~iscell(source_model_data)
+    error('model_data_allruns must be a cell array in both source and existing data.');
+end
+if numel(existing_model_data) ~= numel(source_model_data)
+    error(['Run-count mismatch between current data (%d) and existing ', ...
+        'shuffle file (%d): %s'], numel(source_model_data), ...
+        numel(existing_model_data), file_path);
+end
+
+stable_fields = { ...
+    'stim_tag', 'analysis_window', 'bin_size', 'bin_edges', 'bin_centers', ...
+    'fr_threshold', 'ff_threshold', 'dprime_metric', 'dprime_threshold', ...
+    'unit_selection_method', 'use_RF_R2_filter', 'RF_R2_threshold', ...
+    'nan_trial_strategy', 'group_name', 'group_probe', 'condition_fields', ...
+    'condition_index_per_trial_full', 'conditions_full', 'n_trials_full'};
+
+for s = 1:numel(source_model_data)
+    old_run = existing_model_data{s};
+    new_run = source_model_data{s};
+
+    if ~isstruct(old_run) || ~isstruct(new_run)
+        error('Run %d is not a struct in source or existing model data: %s', ...
+            s, file_path);
+    end
+
+    for k = 1:numel(stable_fields)
+        f = stable_fields{k};
+        if ~isfield(old_run, f) || ~isfield(new_run, f)
+            error('Required compatibility field %s is missing in run %d: %s', ...
+                f, s, file_path);
+        end
+        if ~isequaln(old_run.(f), new_run.(f))
+            error(['Compatibility field %s differs in run %d. Existing ', ...
+                'shuffle data were not modified: %s'], f, s, file_path);
+        end
+    end
+
+    if ~isfield(old_run, 'raw_count') || ~isfield(new_run, 'raw_count')
+        error('raw_count is required for compatibility checks in run %d: %s', ...
+            s, file_path);
+    end
+    validate_trial_struct_layout_equal( ...
+        old_run.raw_count, new_run.raw_count, 'raw_count', s, file_path);
+
+    old_groupd = get_groupd_for_shuffle(old_run, 'raw_count');
+    new_groupd = get_groupd_for_shuffle(new_run, 'raw_count');
+    if ~isequal(old_groupd, new_groupd)
+        error(['raw_count group layout differs in run %d. Existing shuffle ', ...
+            'data were not modified: %s'], s, file_path);
+    end
+
+    old_n_units = sum(old_groupd);
+    new_n_units = sum(new_groupd);
+    old_unit_identity = get_unit_identity_for_unit_shuffle( ...
+        old_run, 'raw_count', old_n_units);
+    new_unit_identity = get_unit_identity_for_unit_shuffle( ...
+        new_run, 'raw_count', new_n_units);
+    if ~isequal(old_unit_identity, new_unit_identity)
+        error(['raw_count retained-neuron layout differs in run %d. Existing ', ...
+            'shuffle data were not modified: %s'], s, file_path);
+    end
+
+    validate_reference_unit_metadata_equal( ...
+        old_run, new_run, new_field, s, file_path);
+end
+end
+
+function validate_reference_unit_metadata_equal( ...
+        old_run, new_run, new_field, run_index, file_path)
+
+new_names = fieldnames(new_run);
+for k = 1:numel(new_names)
+    f = new_names{k};
+    if strncmp(f, [new_field '_'], numel(new_field) + 1)
+        continue;
+    end
+
+    is_reference_metadata = ...
+        ~isempty(regexp(f, '^(raw_count_)?probe[0-9]+_usedunit_', 'once')) || ...
+        strcmp(f, 'groupd') || ...
+        strcmp(f, 'kept_trial_ids_global') || ...
+        strcmp(f, 'kept_neuron_global') || ...
+        strcmp(f, 'raw_count_groupd') || ...
+        strcmp(f, 'raw_count_kept_trial_ids') || ...
+        strcmp(f, 'raw_count_kept_neuron_global');
+
+    if ~is_reference_metadata
+        continue;
+    end
+    if ~isfield(old_run, f) || ~isequaln(old_run.(f), new_run.(f))
+        error(['Unit/trial metadata field %s differs or is missing in run %d. ', ...
+            'Existing shuffle data were not modified: %s'], ...
+            f, run_index, file_path);
+    end
+end
+end
+
+function validate_new_field_matches_raw_count_layout(run_entry, new_field, run_index)
+if ~isfield(run_entry, new_field)
+    error(['Field %s is missing from newly prepared model_data_allruns{%d}. ', ...
+        'Run the updated processing_to_count_and_fr.m first.'], ...
+        new_field, run_index);
+end
+if ~isfield(run_entry, 'raw_count')
+    error('raw_count is missing from newly prepared model_data_allruns{%d}.', ...
+        run_index);
+end
+
+validate_trial_struct_layout_equal( ...
+    run_entry.(new_field), run_entry.raw_count, new_field, run_index, ...
+    'newly prepared model_data_allruns');
+
+new_groupd = get_groupd_for_shuffle(run_entry, new_field);
+raw_groupd = get_groupd_for_shuffle(run_entry, 'raw_count');
+if ~isequal(new_groupd, raw_groupd)
+    error(['%s and raw_count have different group layouts in run %d. ', ...
+        'The saved raw_count shuffle mapping cannot be reused safely.'], ...
+        new_field, run_index);
+end
+
+new_n_units = sum(new_groupd);
+raw_n_units = sum(raw_groupd);
+new_unit_identity = get_unit_identity_for_unit_shuffle( ...
+    run_entry, new_field, new_n_units);
+raw_unit_identity = get_unit_identity_for_unit_shuffle( ...
+    run_entry, 'raw_count', raw_n_units);
+if ~isequal(new_unit_identity, raw_unit_identity)
+    error(['%s and raw_count have different retained-neuron layouts in run ', ...
+        '%d. The saved raw_count shuffle mapping cannot be reused safely.'], ...
+        new_field, run_index);
+end
+end
+
+function validate_trial_struct_layout_equal(A, B, field_name, run_index, file_path)
+if ~isstruct(A) || ~isstruct(B) || ...
+        ~isfield(A, 'trialId') || ~isfield(B, 'trialId') || ...
+        ~isfield(A, 'T') || ~isfield(B, 'T') || ...
+        ~isfield(A, 'y') || ~isfield(B, 'y')
+    error('Invalid trial-struct layout for %s in run %d: %s', ...
+        field_name, run_index, file_path);
+end
+
+ids_A = get_trial_ids_for_shuffle(A);
+ids_B = get_trial_ids_for_shuffle(B);
+if ~isequal(ids_A, ids_B)
+    error(['TrialId layout for %s differs in run %d. Existing shuffle data ', ...
+        'were not modified: %s'], field_name, run_index, file_path);
+end
+
+for i = 1:numel(A)
+    if ~isequal(A(i).T, B(i).T) || ~isequal(size(A(i).y), size(B(i).y))
+        error(['Trial-struct size for %s differs at trialId %d in run %d. ', ...
+            'Existing shuffle data were not modified: %s'], ...
+            field_name, A(i).trialId, run_index, file_path);
+    end
+end
+end
+
+function [target_run, did_copy] = ...
+        copy_new_field_bookkeeping_fields( ...
+        target_run, source_run, new_field, run_index)
+
+did_copy = false;
+source_names = fieldnames(source_run);
+excluded = { ...
+    new_field, ...
+    sprintf('%s_by_condition', new_field), ...
+    sprintf('%s_nanmask', new_field), ...
+    sprintf('%s_nanmask_by_condition', new_field)};
+prefix = [new_field '_'];
+
+for k = 1:numel(source_names)
+    f = source_names{k};
+    if ~strncmp(f, prefix, numel(prefix)) || any(strcmp(f, excluded))
+        continue;
+    end
+
+    if isfield(target_run, f)
+        if ~isequaln(target_run.(f), source_run.(f))
+            error(['Existing bookkeeping field %s differs in run %d. ', ...
+                'No existing fields were overwritten.'], f, run_index);
+        end
+    else
+        target_run.(f) = source_run.(f);
+        did_copy = true;
+    end
+end
+end
+
+function validate_saved_shuffle_info(info, n_runs, info_name, file_path)
+if ~isstruct(info) || ~isfield(info, 'runs') || ...
+        ~iscell(info.runs) || numel(info.runs) ~= n_runs
+    error(['%s in %s does not contain one saved run mapping for each of ', ...
+        'the %d current runs. Existing data were not modified.'], ...
+        info_name, file_path, n_runs);
+end
+end
+
+function run_shuffle = get_saved_group_shuffle_for_raw_count( ...
+        run_info, run_index, file_path)
+
+if ~isstruct(run_info) || ~isfield(run_info, 'shuffle_mode')
+    error('Invalid saved group-shuffle information for run %d: %s', ...
+        run_index, file_path);
+end
+
+switch run_info.shuffle_mode
+    case 'shared_across_data_versions'
+        if ~isfield(run_info, 'shared_shuffle')
+            error('shared_shuffle is missing for run %d: %s', ...
+                run_index, file_path);
+        end
+        run_shuffle = run_info.shared_shuffle;
+
+    case 'per_data_version'
+        if ~isfield(run_info, 'field_shuffle') || ...
+                ~isfield(run_info.field_shuffle, 'raw_count')
+            error(['Saved per-data-version group shuffle has no raw_count ', ...
+                'mapping for run %d: %s'], run_index, file_path);
+        end
+        run_shuffle = run_info.field_shuffle.raw_count;
+
+    otherwise
+        error('Unknown saved group shuffle_mode %s for run %d: %s', ...
+            run_info.shuffle_mode, run_index, file_path);
+end
+end
+
+function run_shuffle = get_saved_unit_shuffle_for_raw_count( ...
+        run_info, run_index, file_path)
+
+if ~isstruct(run_info) || ~isfield(run_info, 'shuffle_mode')
+    error('Invalid saved unit-shuffle information for run %d: %s', ...
+        run_index, file_path);
+end
+
+switch run_info.shuffle_mode
+    case 'shared_across_data_versions'
+        if ~isfield(run_info, 'shared_shuffle')
+            error('shared unit shuffle is missing for run %d: %s', ...
+                run_index, file_path);
+        end
+        run_shuffle = run_info.shared_shuffle;
+
+    case 'per_data_version'
+        if ~isfield(run_info, 'field_shuffle') || ...
+                ~isfield(run_info.field_shuffle, 'raw_count')
+            error(['Saved per-data-version unit shuffle has no raw_count ', ...
+                'mapping for run %d: %s'], run_index, file_path);
+        end
+        run_shuffle = run_info.field_shuffle.raw_count;
+
+    otherwise
+        error('Unknown saved unit shuffle_mode %s for run %d: %s', ...
+            run_info.shuffle_mode, run_index, file_path);
+end
+end
+
+function validate_saved_group_shuffle_matches_field( ...
+        run_shuffle, run_entry, field_name, run_index, file_path)
+
+required_fields = {'n_groups', 'conditions'};
+for k = 1:numel(required_fields)
+    if ~isfield(run_shuffle, required_fields{k})
+        error('Saved group mapping lacks %s in run %d: %s', ...
+            required_fields{k}, run_index, file_path);
+    end
+end
+
+groupd = get_groupd_for_shuffle(run_entry, field_name);
+if ~isequal(run_shuffle.n_groups, numel(groupd))
+    error(['Saved group mapping has %d groups but %s has %d groups in run ', ...
+        '%d. Existing data were not modified: %s'], ...
+        run_shuffle.n_groups, field_name, numel(groupd), run_index, file_path);
+end
+
+validate_saved_mapping_trial_ids( ...
+    run_shuffle.conditions, run_entry, field_name, run_index, file_path);
+
+for c = 1:numel(run_shuffle.conditions)
+    condition_map = run_shuffle.conditions(c);
+    if ~isfield(condition_map, 'source_trial_ids_by_group') || ...
+            ~iscell(condition_map.source_trial_ids_by_group) || ...
+            numel(condition_map.source_trial_ids_by_group) ~= numel(groupd)
+        error(['Invalid group-specific source-trial mapping for condition %d, ', ...
+            'run %d: %s'], c, run_index, file_path);
+    end
+
+    n_trials = numel(condition_map.trial_ids_present);
+    for g = 1:numel(groupd)
+        source_ids = condition_map.source_trial_ids_by_group{g};
+        if numel(source_ids) ~= n_trials || ...
+                ~all(ismember(source_ids, condition_map.trial_ids_present))
+            error(['Invalid source trial IDs for condition %d, group %d, ', ...
+                'run %d: %s'], c, g, run_index, file_path);
+        end
+    end
+end
+end
+
+function validate_saved_unit_shuffle_matches_field( ...
+        run_shuffle, run_entry, field_name, run_index, file_path)
+
+required_fields = {'n_units', 'conditions'};
+for k = 1:numel(required_fields)
+    if ~isfield(run_shuffle, required_fields{k})
+        error('Saved unit mapping lacks %s in run %d: %s', ...
+            required_fields{k}, run_index, file_path);
+    end
+end
+
+n_units = sum(get_groupd_for_shuffle(run_entry, field_name));
+if ~isequal(run_shuffle.n_units, n_units)
+    error(['Saved unit mapping has %d units but %s has %d units in run %d. ', ...
+        'Existing data were not modified: %s'], ...
+        run_shuffle.n_units, field_name, n_units, run_index, file_path);
+end
+
+validate_saved_mapping_trial_ids( ...
+    run_shuffle.conditions, run_entry, field_name, run_index, file_path);
+
+for c = 1:numel(run_shuffle.conditions)
+    condition_map = run_shuffle.conditions(c);
+    if ~isfield(condition_map, 'source_trial_ids_by_unit')
+        error(['Unit-specific source-trial mapping is missing for condition ', ...
+            '%d, run %d: %s'], c, run_index, file_path);
+    end
+
+    n_trials = numel(condition_map.trial_ids_present);
+    source_ids = condition_map.source_trial_ids_by_unit;
+    if ~isequal(size(source_ids), [n_units, n_trials]) || ...
+            ~all(ismember(source_ids(:), condition_map.trial_ids_present))
+        error(['Invalid unit-specific source-trial mapping for condition %d, ', ...
+            'run %d: %s'], c, run_index, file_path);
+    end
+end
+end
+
+function validate_saved_mapping_trial_ids( ...
+        condition_maps, run_entry, field_name, run_index, file_path)
+
+if numel(condition_maps) ~= numel(run_entry.conditions_full)
+    error(['Saved mapping condition count differs from current data for %s, ', ...
+        'run %d: %s'], field_name, run_index, file_path);
+end
+
+trial_ids = get_trial_ids_for_shuffle(run_entry.(field_name));
+condition_index = run_entry.condition_index_per_trial_full(:)';
+
+if any(trial_ids < 1) || any(trial_ids > numel(condition_index)) || ...
+        any(trial_ids ~= round(trial_ids))
+    error('Invalid trialId in %s, run %d: %s', ...
+        field_name, run_index, file_path);
+end
+
+for c = 1:numel(condition_maps)
+    condition_map = condition_maps(c);
+    if ~isfield(condition_map, 'condition_index') || ...
+            ~isfield(condition_map, 'trial_ids_present') || ...
+            ~isequal(condition_map.condition_index, c)
+        error('Invalid saved mapping metadata for condition %d, run %d: %s', ...
+            c, run_index, file_path);
+    end
+
+    expected_trial_ids = trial_ids(condition_index(trial_ids) == c);
+    saved_trial_ids = condition_map.trial_ids_present(:)';
+    if ~isequal(saved_trial_ids, expected_trial_ids(:)')
+        error(['Saved mapping trial IDs differ from %s for condition %d, ', ...
+            'run %d. Existing data were not modified: %s'], ...
+            field_name, c, run_index, file_path);
+    end
+end
+end
+
+function validate_existing_group_raw_count_consistency( ...
+        target_run, source_run, group_shuffle, run_index, file_path)
+
+groupd = get_groupd_for_shuffle(source_run, 'raw_count');
+expected_raw_count = apply_shuffle_to_trial_struct_for_field( ...
+    source_run.raw_count, groupd, group_shuffle, 'raw_count', run_index);
+
+if ~trial_struct_values_equal(target_run.raw_count, expected_raw_count)
+    error(['Current raw_count plus the saved group mapping does not reproduce ', ...
+        'the existing shuffled raw_count in run %d. The existing file may ', ...
+        'come from different source data; it was not modified: %s'], ...
+        run_index, file_path);
+end
+end
+
+function validate_existing_two_stage_raw_count_consistency( ...
+        target_run, source_run, group_shuffle, unit_shuffle, ...
+        run_index, file_path)
+
+groupd = get_groupd_for_shuffle(source_run, 'raw_count');
+expected_raw_count = apply_shuffle_to_trial_struct_for_field( ...
+    source_run.raw_count, groupd, group_shuffle, 'raw_count', run_index);
+expected_raw_count = apply_unit_independent_shuffle_to_trial_struct( ...
+    expected_raw_count, unit_shuffle, 'raw_count', run_index);
+
+if ~trial_struct_values_equal(target_run.raw_count, expected_raw_count)
+    error(['Current raw_count plus the two saved shuffle mappings does not ', ...
+        'reproduce the existing unit-independently shuffled raw_count in ', ...
+        'run %d. The existing file may come from different source data; ', ...
+        'it was not modified: %s'], run_index, file_path);
+end
+end
+
+function tf = trial_struct_values_equal(A, B)
+tf = false;
+if ~isstruct(A) || ~isstruct(B) || numel(A) ~= numel(B) || ...
+        ~isfield(A, 'trialId') || ~isfield(B, 'trialId') || ...
+        ~isfield(A, 'T') || ~isfield(B, 'T') || ...
+        ~isfield(A, 'y') || ~isfield(B, 'y')
+    return;
+end
+
+for i = 1:numel(A)
+    if ~isequaln(A(i).trialId, B(i).trialId) || ...
+            ~isequaln(A(i).T, B(i).T) || ...
+            ~isequaln(A(i).y, B(i).y)
+        return;
+    end
+end
+tf = true;
+end
 
 function pick_area = normalize_pick_area(pick_area, nProbe)
 if ~iscell(pick_area) || numel(pick_area) ~= nProbe
@@ -1142,6 +1884,7 @@ fields = { ...
     'z_across_conditions', ...
     'demean_count_within_trial', ...
     'demean_fr_within_trial', ...
+    'demean_count_within_t_and_condition', ...
     'demean_pooledsd_within_condition'};
 end
 function catgt_folder = get_common_catgt_folder(probe_ksDirs)
