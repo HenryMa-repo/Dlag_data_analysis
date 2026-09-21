@@ -146,7 +146,10 @@ fit_fa(runIdx, seqTrue, ...
 % Plot cross-validated performance vs estimated dimensionality
 plotPerfvsDim_fa(cvResults, ...
                  'bestModels', bestModels);
-               
+              
+if any(bestModels(:) == 1)
+
+else
 % % % % % Collect the optimal total dimensionality for each group.
 numGroups = length(yDims);
 xDim_total_fa = nan(1,numGroups);
@@ -278,7 +281,7 @@ fit_dlag(runIdx, seqTrue, ...
          'saveData', saveData);                
 
 
-
+end
 
 
 
