@@ -2,12 +2,12 @@
 clc;clear
 % Synthetic data generated from a DLAG model
 % dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1/model_data_allruns';
-dat_file = 'I:\np_data\RafiL001p0122_g1\catgt_RafiL001p0122_g1\model_data_allruns';
+dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\model_data_allruns_trialshuffled_unit_independently_withincondition';
 fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'raw_count';  
-data_condtion=[1:16];
+data_content = 'demean_count_within_t_and_condition';  
+data_condtion=[];
 usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
@@ -68,7 +68,7 @@ end
 
 xDims = {0:yDims(1)-1, 0:yDims(2)-1}; % Sweep over these dimensionalities
 
-runIdx = 1;
+runIdx = 2;
 
 if isempty(data_condtion)
     cond_list = [];  % no condition mode
@@ -114,6 +114,11 @@ plotPerfvsDim_fa(cvResults, ...
 
 savefig([tempfname,'/FA_cv_results.fig'])
 exportgraphics(gcf, [tempfname,'/FA_cv_results.png'])
+
+
+if any(bestModels(:) == 1)
+
+else
 
 
 % Collect the optimal total dimensionality for each group.
@@ -412,6 +417,8 @@ bestm_fname = generate_inference_fname_dlag(runIdx, ...
 
 save(bestm_fname,"bestModel","res","seqEst","varexp","domexp","popcorr","popcov","gp_params","cutoffPC","d_shared")
 close all
+
+end
 end % ================== LOOP END ==================
 
 
