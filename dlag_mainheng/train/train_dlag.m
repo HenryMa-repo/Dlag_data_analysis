@@ -196,7 +196,6 @@ plotCSVEvsDim(csve, xDims, xDim_opt_fa);
 %  ===============================================================
 
 % Change other input arguments as appropriate
-runIdx = 1;
 numFolds = 4;
 maxIters = 1000; % Limit EM iterations during cross-validation for speedup. default is 1000
 fitAll = false; % Don't fit a model to all train data

@@ -9,7 +9,7 @@ fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'demean_count_within_trial';  
-data_condtion=[2:16];
+data_condtion=[1:16];
 usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
 
 % options:
@@ -195,7 +195,6 @@ plotCSVEvsDim(csve, xDims, xDim_opt_fa);
 %  ===============================================================
 
 % Change other input arguments as appropriate
-runIdx = 1;
 numFolds = 4;
 maxIters = 1000; % Limit EM iterations during cross-validation for speedup. default is 1000
 fitAll = false; % Don't fit a model to all train data

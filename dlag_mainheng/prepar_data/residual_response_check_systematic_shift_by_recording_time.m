@@ -87,7 +87,7 @@ fig_out_dir = '';  % empty -> create a subfolder beside dat_file
 save_png = true;
 save_matlab_fig = false;  % .fig files can be large for the condition grid
 png_dpi = 300;
-close_figures_after_saving = false;
+close_figures_after_saving = true;
 
 % Figure visibility: 'on' for interactive use, 'off' for headless saving.
 figure_visibility = 'on';
@@ -611,11 +611,7 @@ if isnumeric(value)
         text_value = mat2str(value);
     end
 elseif islogical(value)
-    if isscalar(value)
         text_value = mat2str(value);
-    else
-        text_value = mat2str(value);
-    end
 elseif ischar(value)
     text_value = value;
 elseif isstring(value)
