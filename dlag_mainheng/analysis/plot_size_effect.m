@@ -78,11 +78,21 @@ clear;
 
 %% ----------------------- User parameters -----------------------
 
-data_content = 'raw_count';
-% options:
-% raw_count, raw_fr, z_within_trial, z_within_condition,
-% z_across_conditions, demean_count_within_trial,
-% demean_fr_within_trial, demean_pooledsd_within_condition
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % [] means pooled all-condition model.
 % Non-empty means condition-specific models, e.g. 1:16.
@@ -94,8 +104,6 @@ data_condition = [];
 % 2 = use high contrast only.
 % Low/high are defined within each stim_name, not by global min/max contrast.
 pick_contrast = 0;
-
-runIdx = 1;
 
 % Time-window parameters, in seconds.
 % Example:

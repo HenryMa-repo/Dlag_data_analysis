@@ -48,8 +48,21 @@ clear;
 
 root_dir = 'I:\np_data';
 
-data_content = 'raw_count';
-runIdx = 1;
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % Display/file labels only. Order must match the saved neural-group order.
 group_names = {'V1', 'MT'};

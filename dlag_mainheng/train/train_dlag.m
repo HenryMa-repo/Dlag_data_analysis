@@ -9,19 +9,24 @@ fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'z_across_conditions';  
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
 
 usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
-
-% options:
-% raw_count, raw_fr, z_within_trial, z_within_condition, 
-% z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % Extract all stim tags
 all_run_tags = get_all_run_tags(model_data_allruns);
 
-
 wanted_tag =stim_tag;
-
 
 % Find the requested run by exact stim_tag match.
 run_idx = find(strcmp(all_run_tags, wanted_tag));
@@ -124,7 +129,6 @@ randomSeed = 0;           % Seed the random number generator, for reproducibilit
 % Change other input arguments as appropriate
       % Results will be saved in baseDir/mat_results/runXXX/,  
                           % where XXX is runIdx. Use a new runIdx for each dataset.
-runIdx = 1;
 numFolds = 4;
 xDims = {0:yDims(1)-1, 0:yDims(2)-1}; % Sweep over these dimensionalities
 

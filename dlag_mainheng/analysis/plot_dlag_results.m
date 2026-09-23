@@ -9,9 +9,12 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'demean_count_within_t_and_condition';  
 data_condtion=[];
 usebest=1; %1 means use best xDim_total_fa,0 means use xDim_opt_fa 95% csve
+runIdx = 2; %1 means data, 2 means shuffle all units independently 
+
+
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
-% z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
+% z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition, demean_count_within_t_and_condition
 
 % Extract all stim tags
 all_run_tags = get_all_run_tags(model_data_allruns);
@@ -68,7 +71,6 @@ end
 
 xDims = {0:yDims(1)-1, 0:yDims(2)-1}; % Sweep over these dimensionalities
 
-runIdx = 2;
 
 if isempty(data_condtion)
     cond_list = [];  % no condition mode

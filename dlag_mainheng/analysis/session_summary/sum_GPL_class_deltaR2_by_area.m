@@ -65,7 +65,7 @@ root_dir = 'I:\np_data';
 % -------------------------------------------------------------------------
 
 data_content = 'demean_count_within_t_and_condition';
-% Common options:
+% Options usually include:
 %   raw_count
 %   raw_fr
 %   z_within_trial
@@ -74,6 +74,11 @@ data_content = 'demean_count_within_t_and_condition';
 %   demean_count_within_trial
 %   demean_fr_within_trial
 %   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % Must match calculate_reconstruction_R2_dfferent_ways.m.
 r2_split_mode = 'by_three_features';
@@ -104,8 +109,6 @@ model_mode = 'all_condition_model';
 % Options:
 %   'all_condition_model'
 %   'condition_specific_models'
-
-runIdx = 1;
 
 % Must match the source file produced by
 % calculate_reconstruction_R2_dfferent_ways.m.

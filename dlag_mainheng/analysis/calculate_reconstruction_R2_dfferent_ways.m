@@ -84,6 +84,8 @@ data_content = 'raw_count';
 %   demean_count_within_trial
 %   demean_fr_within_trial
 %   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
 
 % Controls how trials/conditions are pooled before calculating R2.
 r2_split_mode = 'by_three_features';
@@ -99,7 +101,8 @@ data_condition = [];
 % Example:
 % data_condition = 1:16;
 
-runIdx = 1;
+runIdx = 1; %1 means data, 2 means shuffle all units independently 
+
 
 % Display/file labels only. Their order must follow the DLAG model-group
 % order. These names do not affect trial, neuron, or R2 selection and are

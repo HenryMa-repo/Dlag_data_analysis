@@ -22,14 +22,24 @@ clc; clear;
 % -------------------------------------------------------------------------
 % User parameters
 % -------------------------------------------------------------------------
-data_content = 'raw_count';
-% options:
-% raw_count, raw_fr, z_within_trial, z_within_condition,
-% z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
-% demean_pooledsd_within_condition
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 data_condition = [];   % [] for pooled all-condition mode, or e.g. 1:16
-runIdx = 1;
+
 
 % Display/result labels only. Their order must follow the DLAG model-group
 % order. These names do not affect latent selection and are not compared

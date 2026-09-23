@@ -47,13 +47,22 @@ model_data_file = fullfile(session_dir, 'model_data_allruns.mat');
 % Must match the data content used to fit the pooled DLAG model.
 % This default follows Anova_latents_for_all_conds_used_dlag.m.
 data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
 
 % DLAG result-folder index, matching the original ANOVA program:
 %   FA_Dlag_<data_content>/mat_results/run%03d
-% This is intentionally separate from run_idx below. run_idx is obtained
-% by matching stim_tag in model_data_allruns; runIdx chooses the fitted
-% DLAG result folder.
-runIdx = 1;
+runIdx = 1; %1 means data, 2 means shuffle all units independently
+
 
 % Exact run tag stored in model_data_allruns. If this is empty and there is
 % only one run, that run is selected automatically. If several runs exist,

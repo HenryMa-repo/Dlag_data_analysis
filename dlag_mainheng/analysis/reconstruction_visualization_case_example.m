@@ -25,7 +25,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'raw_count';
+data_content = 'demean_count_within_t_and_condition';
 % Options usually include:
 %   raw_count
 %   raw_fr
@@ -35,12 +35,17 @@ data_content = 'raw_count';
 %   demean_count_within_trial
 %   demean_fr_within_trial
 %   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % [] means pooled all-condition model.
 % Example: 1:16 means condition-specific models, one model per condition.
 data_condition = [];
 
-runIdx = 1;
 
 % Width of one time bin. For raw_count models, all original and reconstructed
 % values are multiplied by 1000/bin_width_ms for display in spikes/s (Hz).

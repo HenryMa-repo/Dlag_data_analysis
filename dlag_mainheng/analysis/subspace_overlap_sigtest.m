@@ -38,13 +38,23 @@ clear;
 
 %% ========================== USER SETTINGS ==============================
 
-data_content = 'raw_count';
-% Common options:
-% raw_count, raw_fr, z_within_trial, z_within_condition,
-% z_across_conditions, demean_count_within_trial,
-% demean_fr_within_trial, demean_pooledsd_within_condition
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
 
-runIdx = 1;
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
+
 
 % Used only by covariance_weighted control to select the same run from
 % model_data_allruns. This is the stimulus tag, not runIdx above.

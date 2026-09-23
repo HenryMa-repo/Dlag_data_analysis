@@ -35,8 +35,9 @@ data_content = 'raw_count';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
 data_condtion = [];
-runIdx = 1;
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 DSL_threshold = 0.3;
 
 % Output options

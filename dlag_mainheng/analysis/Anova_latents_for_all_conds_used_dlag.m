@@ -17,12 +17,22 @@ fprintf('Reading from %s \n', dat_file);
 load(dat_file);
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'raw_count';
-% options:
-% raw_count, raw_fr, z_within_trial, z_within_condition,
-% z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
 
-runIdx = 1;
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
+
 baseDir = ['./FA_Dlag_', data_content];       % Base directory where results will be saved
 
 % Display/file labels only. Their order must follow the DLAG model-group

@@ -50,11 +50,21 @@ root_dir = 'I:\np_data';
 % -------------------------------------------------------------------------
 % Data content
 % -------------------------------------------------------------------------
-data_content = 'raw_count';
-% Options:
-%   raw_count, raw_fr, z_within_trial, z_within_condition,
-%   z_across_conditions, demean_count_within_trial,
-%   demean_fr_within_trial, demean_pooledsd_within_condition
+data_content = 'demean_count_within_t_and_condition';
+% Options usually include:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+%	demean_count_within_t_and_condition
+
+% DLAG result-folder index, matching the original ANOVA program:
+%   FA_Dlag_<data_content>/mat_results/run%03d
+runIdx = 1; %1 means data, 2 means shuffle all units independently
 
 % -------------------------------------------------------------------------
 % Model mode
@@ -103,8 +113,6 @@ metric_name = 'percentLatents';
 %
 % Notes:
 %   all_condition_model + by_condition supports only 'percentSharedVariance'.
-
-runIdx = 1;
 
 % Display/file labels only. Their order must follow the group order already
 % present in the saved Latents_compare results. These names do not select
