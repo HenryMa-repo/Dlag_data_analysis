@@ -74,7 +74,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'raw_count';
+data_content = 'demean_count_within_t_and_condition';
 % Common options:
 %   raw_count
 %   raw_fr
@@ -112,7 +112,7 @@ group_names = {'V1', 'MT'};
 % Metadata used to map trialId to stimulus type and to recover unit IDs in
 % the already-defined model-group order.
 dat_file = fullfile('.', 'model_data_allruns');
-stim_tag = '[Gpl2_2c_2sz_400_2_200isi]';
+stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
 %% ------------------------------------------------------------------------
 % Reconstruction fields included in this analysis

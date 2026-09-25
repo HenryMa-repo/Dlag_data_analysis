@@ -116,7 +116,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'raw_count';
+data_content = 'demean_count_within_t_and_condition';
 % options usually include:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
