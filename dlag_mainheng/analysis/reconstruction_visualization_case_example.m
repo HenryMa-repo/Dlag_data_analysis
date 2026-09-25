@@ -14,9 +14,12 @@
 % drawn once, to the left of the first-neuron column. The time axis appears
 % only in the first-neuron panel for the last reconstruction.
 %
-% In addition, for the first selected neuron in each group, one trial-average
-% figure is created for each condition. Each such figure contains one panel
-% per analysis field and uses a common y scale across all of its panels.
+% In addition, for the first selected neuron in each group, one curve figure
+% can be created for each condition. The curve figures can show either the
+% trial average or randomly selected individual trials. Each figure contains
+% one panel per analysis field and uses a common y scale across all panels.
+% In individual-trial mode, every analysis field and every neural group uses
+% the same selected trials for a given condition.
 
 clc;
 clear;
@@ -68,8 +71,8 @@ case_neuron_ids = { ...
     [125 173], ...  % Group 1 
     [36 165]  ...  % Group 2
     };
-
-% Row order for the heatmap and panel order for trial-average figures.
+	
+% Row order for the heatmap and panel order for condition-wise curve figures.
 % Any positive number of fields is supported, provided each field exists in
 % seqEst and reconstruction_labels contains the same number of entries.
 analysis_fields = { ...
@@ -120,25 +123,43 @@ reconstruction_label_right = 0.100;
 reconstruction_label_width = 0.095;
 colorbar_position = [0.935 0.065 0.018 0.875];
 
-% Trial-average figures: first selected neuron of each group, one figure per
-% condition, with one panel per analysis field in a single row. Total figure
-% width is calculated from trial_average_panel_width_pixels times the number
-% of analysis fields.
-plot_trial_average = true;
+% Condition-wise curve figures: first selected neuron of each group, one
+% figure per condition, with one panel per analysis field in a single row.
+%
+% Options:
+%   'trial_average'     : plot the across-trial mean, with optional SEM/STD
+%   'individual_trials' : plot selected trials separately as black lines;
+%                         no trial average is computed or drawn
+%   'none'              : do not create condition-wise curve figures
+trial_plot_mode = 'individual_trials';
+
+% Individual-trial options. The trial selection is made once per condition
+% and then reused for Original and every reconstruction field in both groups.
+% Use Inf to plot every available trial. If the requested number exceeds the
+% number available in a condition, all trials in that condition are used.
+n_individual_trials_to_plot = 30;
+individual_trial_random_seed = 1;
+individual_trial_line_width = 0.5;
+individual_trial_subfolder = 'individual_trials_first_unit';
+
+% Trial-average options, used only when trial_plot_mode = 'trial_average'.
 trial_average_error = 'sem';  % 'sem', 'std', or 'none'
 trial_average_subfolder = 'trial_average_first_unit';
-trial_average_panel_width_pixels = 330;
-trial_average_figure_height = 360;
 trial_average_line_width = 1.5;
 trial_average_shade_color = [0.72 0.72 0.72];
 trial_average_shade_alpha = 0.45;
-trial_average_y_padding_fraction = 0.06;
+
+% Layout shared by both curve-figure modes. Total width is calculated from
+% trial_curve_panel_width_pixels times the number of analysis fields.
+trial_curve_panel_width_pixels = 330;
+trial_curve_figure_height = 360;
+trial_curve_y_padding_fraction = 0.06;
 
 % Save switches. SVG is enabled by default for vector-graphics editing.
 save_fig = false;
-save_svg = true;
+save_svg = false;
 save_png = false;
-close_after_save = true;
+close_after_save = false;
 png_dpi = 300;
 
 %% ------------------------------------------------------------------------
@@ -166,23 +187,46 @@ n_analysis_fields = numel(analysis_fields);
 validateattributes(heatmap_row_height_pixels, {'numeric'}, ...
     {'scalar', 'real', 'finite', 'positive'}, ...
     mfilename, 'heatmap_row_height_pixels');
-validateattributes(trial_average_panel_width_pixels, {'numeric'}, ...
+validateattributes(trial_curve_panel_width_pixels, {'numeric'}, ...
     {'scalar', 'real', 'finite', 'positive'}, ...
-    mfilename, 'trial_average_panel_width_pixels');
+    mfilename, 'trial_curve_panel_width_pixels');
+validateattributes(trial_curve_figure_height, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'positive'}, ...
+    mfilename, 'trial_curve_figure_height');
+validateattributes(trial_curve_y_padding_fraction, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'nonnegative'}, ...
+    mfilename, 'trial_curve_y_padding_fraction');
 
 % Preserve approximately the same physical panel size as fields are added
 % or removed. No plotting-function edits are needed when the list changes.
 figure_height = round(heatmap_row_height_pixels .* n_analysis_fields);
-trial_average_figure_width = round( ...
-    trial_average_panel_width_pixels .* n_analysis_fields);
+trial_curve_figure_width = round( ...
+    trial_curve_panel_width_pixels .* n_analysis_fields);
 
 validateattributes(bin_width_ms, {'numeric'}, ...
     {'scalar', 'real', 'finite', 'positive'}, ...
     mfilename, 'bin_width_ms');
 
-trial_average_error = validatestring( ...
-    lower(char(string(trial_average_error))), ...
-    {'sem', 'std', 'none'}, mfilename, 'trial_average_error');
+trial_plot_mode = validatestring( ...
+    lower(char(string(trial_plot_mode))), ...
+    {'trial_average', 'individual_trials', 'none'}, ...
+    mfilename, 'trial_plot_mode');
+
+if strcmp(trial_plot_mode, 'trial_average')
+    trial_average_error = validatestring( ...
+        lower(char(string(trial_average_error))), ...
+        {'sem', 'std', 'none'}, mfilename, 'trial_average_error');
+elseif strcmp(trial_plot_mode, 'individual_trials')
+    validatePositiveIntegerOrInfLocal( ...
+        n_individual_trials_to_plot, 'n_individual_trials_to_plot');
+    validateattributes(individual_trial_random_seed, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'integer', 'nonnegative', ...
+         '<=', 2^32 - 1}, ...
+        mfilename, 'individual_trial_random_seed');
+    validateattributes(individual_trial_line_width, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'positive'}, ...
+        mfilename, 'individual_trial_line_width');
+end
 
 if isempty(data_condition)
     use_condition_mode = false;
@@ -304,18 +348,36 @@ fprintf('Number of analysis fields: %d\n', n_analysis_fields);
 fprintf('Display response label: %s\n', response_axis_label);
 fprintf('Bin width: %g ms\n', bin_width_ms);
 fprintf('Output folder: %s\n', saveDir);
+fprintf('Condition-wise curve mode: %s\n', trial_plot_mode);
 
 %% ------------------------------------------------------------------------
-% Plot one N-field-by-2 heatmap per group and condition-average figures
+% Plot one N-field-by-2 heatmap per group and condition-wise curve figures
 % -------------------------------------------------------------------------
 
-if plot_trial_average && (save_fig || save_svg || save_png)
-    trialAverageSaveDir = fullfile(saveDir, trial_average_subfolder);
-    if ~isfolder(trialAverageSaveDir)
-        mkdir(trialAverageSaveDir);
+individualTrialSelections = cell(1, numel(dataBlocks));
+
+switch trial_plot_mode
+    case 'trial_average'
+        trialCurveSubfolder = trial_average_subfolder;
+    case 'individual_trials'
+        individualTrialSelections = selectIndividualTrialsLocal( ...
+            dataBlocks, n_individual_trials_to_plot, ...
+            individual_trial_random_seed);
+        trialCurveSubfolder = individual_trial_subfolder;
+    case 'none'
+        trialCurveSubfolder = '';
+    otherwise
+        error('Unsupported trial_plot_mode: %s', trial_plot_mode);
+end
+
+if ~strcmp(trial_plot_mode, 'none') && ...
+        (save_fig || save_svg || save_png)
+    trialCurveSaveDir = fullfile(saveDir, trialCurveSubfolder);
+    if ~isfolder(trialCurveSaveDir)
+        mkdir(trialCurveSaveDir);
     end
 else
-    trialAverageSaveDir = saveDir;
+    trialCurveSaveDir = saveDir;
 end
 
 for groupIdx = 1:numGroups
@@ -377,18 +439,32 @@ for groupIdx = 1:numGroups
         close(fig);
     end
 
-    if plot_trial_average
-        plotAndSaveTrialAveragesLocal( ...
-            dataBlocks, analysis_fields, reconstruction_labels, ...
-            selectedGlobalRows(1), selectedLocalNeuronIds(1), ...
-            group_file_tags{groupIdx}, data_content, modeTag, this_run, ...
-            response_scale_factor, response_axis_label, bin_width_ms, ...
-            trial_average_error, figure_visible, ...
-            trial_average_figure_width, trial_average_figure_height, ...
-            font_name, axis_font_size, trial_average_line_width, ...
-            trial_average_shade_color, trial_average_shade_alpha, ...
-            trial_average_y_padding_fraction, trialAverageSaveDir, ...
-            save_fig, save_svg, save_png, png_dpi, close_after_save);
+    switch trial_plot_mode
+        case 'trial_average'
+            plotAndSaveTrialAveragesLocal( ...
+                dataBlocks, analysis_fields, reconstruction_labels, ...
+                selectedGlobalRows(1), selectedLocalNeuronIds(1), ...
+                group_file_tags{groupIdx}, data_content, modeTag, this_run, ...
+                response_scale_factor, response_axis_label, bin_width_ms, ...
+                trial_average_error, figure_visible, ...
+                trial_curve_figure_width, trial_curve_figure_height, ...
+                font_name, axis_font_size, trial_average_line_width, ...
+                trial_average_shade_color, trial_average_shade_alpha, ...
+                trial_curve_y_padding_fraction, trialCurveSaveDir, ...
+                save_fig, save_svg, save_png, png_dpi, close_after_save);
+
+        case 'individual_trials'
+            plotAndSaveIndividualTrialsLocal( ...
+                dataBlocks, individualTrialSelections, ...
+                analysis_fields, reconstruction_labels, ...
+                selectedGlobalRows(1), selectedLocalNeuronIds(1), ...
+                group_file_tags{groupIdx}, data_content, modeTag, this_run, ...
+                response_scale_factor, response_axis_label, bin_width_ms, ...
+                individual_trial_random_seed, figure_visible, ...
+                trial_curve_figure_width, trial_curve_figure_height, ...
+                font_name, axis_font_size, individual_trial_line_width, ...
+                trial_curve_y_padding_fraction, trialCurveSaveDir, ...
+                save_fig, save_svg, save_png, png_dpi, close_after_save);
     end
 end
 
@@ -397,6 +473,16 @@ fprintf('\nDone.\n');
 %% ========================================================================
 % Local functions
 % ========================================================================
+
+function validatePositiveIntegerOrInfLocal(value, variableName)
+    isValid = isnumeric(value) && isscalar(value) && isreal(value) && ...
+        ~isnan(value) && value > 0 && ...
+        (isinf(value) || (isfinite(value) && value == fix(value)));
+
+    if ~isValid
+        error('%s must be a positive integer or Inf.', variableName);
+    end
+end
 
 function fields = normalizeFieldListLocal(fields)
     if ischar(fields)
@@ -1018,6 +1104,288 @@ function addAlignedReconstructionLabelsLocal( ...
     end
 end
 
+function selectedTrialIndices = selectIndividualTrialsLocal( ...
+    dataBlocks, nTrialsToPlot, randomSeed)
+
+    selectedTrialIndices = cell(1, numel(dataBlocks));
+    randomStream = RandStream( ...
+        'mt19937ar', 'Seed', double(randomSeed));
+
+    fprintf(['Selecting individual trials once per condition ', ...
+        '(requested = %s, seed = %d).\n'], ...
+        numberOrInfTextLocal(nTrialsToPlot), randomSeed);
+
+    for b = 1:numel(dataBlocks)
+        seqEst = dataBlocks(b).seqEst;
+        nAvailable = numel(seqEst);
+
+        if nAvailable == 0
+            selectedTrialIndices{b} = [];
+            continue;
+        end
+
+        if isinf(nTrialsToPlot) || nTrialsToPlot >= nAvailable
+            thisSelection = 1:nAvailable;
+        else
+            thisSelection = sort( ...
+                randperm(randomStream, nAvailable, nTrialsToPlot));
+        end
+
+        selectedTrialIndices{b} = thisSelection;
+        conditionLabel = char(string(dataBlocks(b).label));
+
+        if isfield(seqEst, 'trialId')
+            allTrialIds = arrayfun(@(s) s.trialId, seqEst);
+            selectedIds = allTrialIds(thisSelection);
+            fprintf(['  Condition %g (%s): selected %d/%d trials; ', ...
+                'trialId = %s\n'], ...
+                dataBlocks(b).conditionId, conditionLabel, ...
+                numel(thisSelection), nAvailable, mat2str(selectedIds));
+        else
+            fprintf(['  Condition %g (%s): selected %d/%d trials; ', ...
+                'local indices = %s\n'], ...
+                dataBlocks(b).conditionId, conditionLabel, ...
+                numel(thisSelection), nAvailable, mat2str(thisSelection));
+        end
+    end
+end
+
+function textValue = numberOrInfTextLocal(value)
+    if isinf(value)
+        textValue = 'Inf';
+    else
+        textValue = sprintf('%d', value);
+    end
+end
+
+function plotAndSaveIndividualTrialsLocal( ...
+    dataBlocks, selectedTrialIndices, analysisFields, reconstructionLabels, ...
+    neuronRow, localNeuronId, groupFileTag, dataContent, modeTag, runMeta, ...
+    responseScaleFactor, responseAxisLabel, binWidthMs, randomSeed, ...
+    figureVisible, figureWidth, figureHeight, fontName, axisFontSize, ...
+    lineWidth, yPaddingFraction, saveDir, ...
+    saveFig, saveSvg, savePng, pngDpi, closeAfterSave)
+
+    if numel(selectedTrialIndices) ~= numel(dataBlocks)
+        error(['selectedTrialIndices must contain one entry for each ', ...
+            'condition block.']);
+    end
+
+    nonEmptyBlocks = find(arrayfun(@(b) ~isempty(b.seqEst), dataBlocks));
+    if isempty(nonEmptyBlocks)
+        warning('No non-empty conditions are available for individual-trial plots.');
+        return;
+    end
+
+    if numel(nonEmptyBlocks) ~= 16
+        warning(['Expected 16 non-empty conditions for individual-trial ', ...
+            'plots, but found %d. One figure will be made for each ', ...
+            'available condition.'], numel(nonEmptyBlocks));
+    end
+
+    fprintf(['Creating %d individual-trial figures for %s, local neuron ', ...
+        '%d. No trial average will be computed or drawn.\n'], ...
+        numel(nonEmptyBlocks), groupFileTag, localNeuronId);
+
+    for ii = 1:numel(nonEmptyBlocks)
+        b = nonEmptyBlocks(ii);
+        block = dataBlocks(b);
+        thisSelection = selectedTrialIndices{b};
+
+        trialCurves = buildIndividualTrialCurvesLocal( ...
+            block.seqEst, thisSelection, analysisFields, neuronRow, ...
+            responseScaleFactor);
+
+        [xValues, xLabelText] = ...
+            getTimeAxisLocal(runMeta, size(trialCurves, 3), binWidthMs);
+
+        conditionId = block.conditionId;
+        conditionLabel = char(string(block.label));
+        nSelected = numel(thisSelection);
+        figureName = sprintf( ...
+            ['%s_individual_trials_%s_%s_neuron%d_condition%02d_', ...
+             '%s_n%d_seed%d'], ...
+            dataContent, modeTag, groupFileTag, localNeuronId, ...
+            conditionId, conditionLabel, nSelected, randomSeed);
+
+        fig = plotIndividualTrialConditionLocal( ...
+            trialCurves, xValues, xLabelText, reconstructionLabels, ...
+            conditionLabel, figureName, responseAxisLabel, ...
+            figureVisible, figureWidth, figureHeight, fontName, ...
+            axisFontSize, lineWidth, yPaddingFraction);
+
+        fileBase = sanitizeFileNameLocal(figureName);
+
+        if saveFig
+            figFile = fullfile(saveDir, [fileBase, '.fig']);
+            saveFigLocal(fig, figFile);
+            fprintf('Saved FIG: %s\n', figFile);
+        end
+
+        if saveSvg
+            svgFile = fullfile(saveDir, [fileBase, '.svg']);
+            saveSvgLocal(fig, svgFile);
+            fprintf('Saved SVG: %s\n', svgFile);
+        end
+
+        if savePng
+            pngFile = fullfile(saveDir, [fileBase, '.png']);
+            savePngLocal(fig, pngFile, pngDpi);
+            fprintf('Saved PNG: %s\n', pngFile);
+        end
+
+        if closeAfterSave
+            close(fig);
+        end
+    end
+end
+
+function trialCurves = buildIndividualTrialCurvesLocal( ...
+    seqEst, selectedTrialIndices, analysisFields, neuronRow, ...
+    responseScaleFactor)
+
+    if isempty(seqEst)
+        error('Cannot build individual-trial curves from an empty seqEst.');
+    end
+
+    selectedTrialIndices = reshape(selectedTrialIndices, 1, []);
+    if isempty(selectedTrialIndices)
+        error('No individual trials were selected from a non-empty seqEst.');
+    end
+
+    if any(~isfinite(selectedTrialIndices)) || ...
+            any(selectedTrialIndices ~= fix(selectedTrialIndices)) || ...
+            any(selectedTrialIndices < 1) || ...
+            any(selectedTrialIndices > numel(seqEst)) || ...
+            numel(unique(selectedTrialIndices)) ~= numel(selectedTrialIndices)
+        error('Selected individual-trial indices are invalid.');
+    end
+
+    nFields = numel(analysisFields);
+    nSelected = numel(selectedTrialIndices);
+    Tref = [];
+    trialCurves = [];
+
+    for f = 1:nFields
+        fieldName = analysisFields{f};
+        checkSeqFieldLocal(seqEst, fieldName, neuronRow);
+
+        T = size(seqEst(selectedTrialIndices(1)).(fieldName), 2);
+        if isempty(Tref)
+            Tref = T;
+            trialCurves = nan(nFields, nSelected, Tref);
+        elseif T ~= Tref
+            error(['Time length mismatch across fields while building ', ...
+                'individual-trial curves.']);
+        end
+
+        for k = 1:nSelected
+            tr = selectedTrialIndices(k);
+            Y = double(seqEst(tr).(fieldName));
+            if size(Y, 2) ~= Tref
+                error('Time length mismatch in seqEst(%d).%s.', tr, fieldName);
+            end
+
+            trialCurves(f, k, :) = reshape( ...
+                Y(neuronRow, :) .* responseScaleFactor, 1, 1, Tref);
+        end
+    end
+end
+
+function fig = plotIndividualTrialConditionLocal( ...
+    trialCurves, xValues, xLabelText, reconstructionLabels, ...
+    conditionLabel, figureName, responseAxisLabel, figureVisible, ...
+    figureWidth, figureHeight, fontName, axisFontSize, ...
+    lineWidth, yPaddingFraction)
+
+    validateattributes(lineWidth, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'positive'}, ...
+        mfilename, 'individual_trial_line_width');
+    validateattributes(yPaddingFraction, {'numeric'}, ...
+        {'scalar', 'real', 'finite', 'nonnegative'}, ...
+        mfilename, 'trial_curve_y_padding_fraction');
+
+    nFields = size(trialCurves, 1);
+    nSelected = size(trialCurves, 2);
+    nTime = size(trialCurves, 3);
+
+    if numel(reconstructionLabels) ~= nFields
+        error(['Individual-trial curve array and reconstruction labels ', ...
+            'disagree.']);
+    end
+    if numel(xValues) ~= nTime
+        error('Individual-trial curves and time axis disagree.');
+    end
+
+    yLimits = sharedValuesYLimitsLocal(trialCurves, yPaddingFraction);
+    xEdges = estimateXEdgesLocal(xValues);
+
+    fig = figure( ...
+        'Name', figureName, ...
+        'NumberTitle', 'off', ...
+        'Color', 'w', ...
+        'Visible', figureVisible, ...
+        'Position', [100, 100, figureWidth, figureHeight]);
+
+    set(fig, ...
+        'DefaultAxesFontName', fontName, ...
+        'DefaultTextFontName', fontName);
+
+    t = tiledlayout(fig, 1, nFields, ...
+        'TileSpacing', 'compact', ...
+        'Padding', 'compact');
+
+    axesList = gobjects(1, nFields);
+
+    for f = 1:nFields
+        ax = nexttile(t, f);
+        axesList(f) = ax;
+        hold(ax, 'on');
+
+        curvesThisField = reshape( ...
+            trialCurves(f, :, :), nSelected, nTime);
+        plot(ax, xValues(:), curvesThisField.', '-', ...
+            'Color', [0 0 0], ...
+            'LineWidth', lineWidth, ...
+            'HandleVisibility', 'off');
+
+        xlim(ax, [xEdges(1), xEdges(end)]);
+        ylim(ax, yLimits);
+
+        title(ax, {conditionLabel; reconstructionLabels{f}}, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize + 1, ...
+            'FontWeight', 'normal');
+
+        if f > 1
+            set(ax, 'YTickLabel', {});
+        end
+
+        cleanAxisLocal(ax, fontName, axisFontSize);
+    end
+
+    try
+        xlabel(t, xLabelText, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+        ylabel(t, responseAxisLabel, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+    catch
+        xlabel(axesList(ceil(nFields / 2)), xLabelText, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+        ylabel(axesList(1), responseAxisLabel, ...
+            'Interpreter', 'none', ...
+            'FontName', fontName, ...
+            'FontSize', axisFontSize);
+    end
+end
+
 function plotAndSaveTrialAveragesLocal( ...
     dataBlocks, analysisFields, reconstructionLabels, ...
     neuronRow, localNeuronId, groupFileTag, dataContent, modeTag, runMeta, ...
@@ -1179,7 +1547,7 @@ function fig = plotTrialAverageConditionLocal( ...
         mfilename, 'trial_average_shade_alpha');
     validateattributes(yPaddingFraction, {'numeric'}, ...
         {'scalar', 'real', 'finite', 'nonnegative'}, ...
-        mfilename, 'trial_average_y_padding_fraction');
+        mfilename, 'trial_curve_y_padding_fraction');
 
     nFields = size(meanCurves, 1);
     if numel(reconstructionLabels) ~= nFields || ...
@@ -1189,8 +1557,9 @@ function fig = plotTrialAverageConditionLocal( ...
 
     lowerCurves = meanCurves - errorCurves;
     upperCurves = meanCurves + errorCurves;
-    yLimits = sharedCurveYLimitsLocal( ...
-        meanCurves, lowerCurves, upperCurves, yPaddingFraction);
+    yLimits = sharedValuesYLimitsLocal( ...
+        [meanCurves(:); lowerCurves(:); upperCurves(:)], ...
+        yPaddingFraction);
     xEdges = estimateXEdgesLocal(xValues);
 
     fig = figure( ...
@@ -1284,14 +1653,12 @@ function drawShadedErrorLocal(ax, xValues, mu, err, shadeColor, shadeAlpha)
         'HandleVisibility', 'off');
 end
 
-function yLimits = sharedCurveYLimitsLocal( ...
-    meanCurves, lowerCurves, upperCurves, paddingFraction)
-
-    vals = [meanCurves(:); lowerCurves(:); upperCurves(:); 0];
+function yLimits = sharedValuesYLimitsLocal(values, paddingFraction)
+    vals = [values(:); 0];
     vals = vals(isfinite(vals));
 
     if isempty(vals)
-        error('No finite values found for trial-average y limits.');
+        error('No finite values found for shared curve y limits.');
     end
 
     lo = min(vals);
