@@ -356,7 +356,7 @@ end
 
 function validateTimescaleDivisionSettingsLocal(lines, colorVal, lineStyle, lineWidth)
 
-    if ~(isnumeric(lines) && isvector(lines))
+    if ~(isnumeric(lines) && (isempty(lines) || isvector(lines)))
         error('timescale_division_lines must be a numeric vector or [].');
     end
 
