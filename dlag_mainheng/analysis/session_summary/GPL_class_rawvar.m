@@ -1,21 +1,22 @@
 %% GPL_class_rawvar.m
-% Across-session balance of MODEL variance in Pattern/Component/Unclassified
-% neurons, using separately fitted each-condition DLAG models.
+% Across-session balance of model or posterior variance in GPL neuron classes.
 % This is a standalone script; start with an empty workspace.
 %
-% Prerequisites, in each root_dir/*/catgt_* session:
+% For MODEL source, in each root_dir/*/catgt_* session:
 %   plot_dlag_results_for_each_condtion_mode_var.m
 %   latent_compare_for_each_condtion_mode.m
 %   GPL_analysis_by_area.m -> unit_gpl_results_sponsub.mat
-% All summary MAT/FIG/PNG/SVG files go to root_dir/each_condition_mode.
+% Summary files are saved to the selected model-mode directory (see below).
 %
-% First SUM variance over latents of a category, then average over neurons
-% belonging to one GPL class (invalid excluded). Differences are:
+% MODEL uses summed C-derived latent variances within each category.
+% POSTERIOR uses variance of the joint category reconstruction, including
+% covariance between its latents. Then average neuron variances within each
+% GPL class (invalid excluded). Differences are:
 %   acr_vs_wit = mean-per-neuron Across variance - Within variance
 %   ff_vs_fb   = mean-per-neuron Feedforward variance - Feedback variance
 % No averaging across latent dimensions and no variance/R2 normalization.
-% Across contains FF, FB and Ambiguous. Independent noise is retained in
-% saved class variance summaries but does not enter these differences.
+% Across contains FF, FB and Ambiguous. MODEL noise is saved separately
+% and does not enter these differences; POSTERIOR has no noise category.
 %
 % condition_display_mode controls STIMULUS display in THIS program:
 %   separate : display eight stimulus-condition distributions, each with
@@ -28,7 +29,7 @@
 % Neuron classes remain separate in both modes.
 %
 % A point represents a class average, not a single neuron. The two stimulus
-% directions are calculated in their own models and retained separately.
+% directions are retained separately in both model modes.
 % A missing cell class gives NaN and contributes no point. A category with
 % no retained latents has zero variance when the cell class is present.
 % Require all eight conditions in both directions; incomplete sessions are
@@ -39,19 +40,27 @@
 % Raw deltas, full class variance summaries, both display representations,
 % neuron counts and source session/direction IDs are always saved in MAT.
 
-% Added source selection:
-%   variance_source = 'model'     : existing C^2 / R results and DSL support.
-%   variance_source = 'posterior' : run posterior_rawvar_each_condition_mode.m
-%       first in every session. Uses its saved neuron category variances;
-%       M-1 across trials per bin, then mean over bins. No model reload or
-%       reconstruction, no DSL filtering, and no independent-noise category.
-%   uncertainty_included = 0 / 1 : selects the matching posterior u0/u1 file.
-%       Ignored for MODEL source. Mismatched/missing inputs are not mixed.
-% Posterior category variances are not additive across latent categories.
-% Missing nonempty Ambiguous reconstructions remain NaN; existing categories
-% and A-W / FF-FB differences continue to work. An absent cell class is NaN.
-% Both sources save to root_dir/each_condition_mode with source-specific names.
-% Statements about C^2, R and variance additivity above apply only to MODEL.
+% Model and variance-source selection:
+%   model_mode = 'each_condition': condition-specific models; both sources.
+%   model_mode = 'all_condition' : one shared model; POSTERIOR source only.
+%   all_condition + model is deliberately unsupported and raises an error.
+%   variance_source = 'model' : original C^2 / R results and DSL support.
+%   variance_source = 'posterior': run posterior_rawvar.m in every session;
+%       data_condition=1:16 for each_condition, [] for all_condition.
+%       Uses saved neuron variances (M-1 across trials per bin, then bin mean).
+%       No model reload/reconstruction, DSL filtering or noise category.
+%   uncertainty_included=0/1 selects the matching posterior u0/u1 result.
+%       It is ignored for the MODEL source.
+% Posterior category variances need not be additive. Missing Ambiguous is
+% computed by posterior_rawvar.m from saved C/xsm; old v1 files with missing
+% values remain readable and retain NaN until regenerated. Absent classes
+% remain NaN. Both directions remain separate, including all-condition fits.
+% New posterior files are preferred; old untagged each-condition v1 outputs
+% are accepted only as a fallback in each_condition mode.
+% Outputs: root_dir/each_condition_mode or root_dir/all_condition_mode.
+% Each new filename includes eachcond/allcond plus model/post_u0/post_u1,
+% so previously saved outputs without the model-mode tag are preserved.
+% Earlier C^2, R and variance-additivity descriptions apply only to MODEL.
 
 clc; clear;
 
@@ -61,6 +70,7 @@ data_content = 'demean_count_within_t_and_condition';
 runIdx = 1;                          % 1 = data; 2 = independently shuffled data
 group_names = {'V1','MT'};            % display labels in MODEL GROUP order
 gpl_mat_name = 'unit_gpl_results_sponsub.mat';
+model_mode = 'each_condition';     % 'each_condition' or 'all_condition'
 variance_source = 'model';          % 'model' or 'posterior'
 uncertainty_included = 0;           % posterior only: 0 = no; 1 = yes
 
@@ -103,7 +113,8 @@ figure_height = 780;
 %% ============================== CONFIG ================================
 cfg = struct('root_dir',root_dir,'data_content',data_content,'runIdx',runIdx, ...
     'group_names',{group_names},'gpl_mat_name',gpl_mat_name, ...
-    'variance_source',variance_source,'uncertainty_included',uncertainty_included, ...
+    'model_mode',model_mode,'variance_source',variance_source, ...
+    'uncertainty_included',uncertainty_included, ...
     'condition_display_mode',condition_display_mode,'DSL_filter',DSL_filter, ...
     'save_mat',save_mat,'save_fig',save_fig,'save_png',save_png,'save_svg',save_svg, ...
     'png_dpi',png_dpi,'close_after_save',close_after_save,'make_plots',make_plots, ...
@@ -118,6 +129,7 @@ cfg = struct('root_dir',root_dir,'data_content',data_content,'runIdx',runIdx, ..
     'between_class_gap',between_class_gap,'font_name',font_name,'axis_font_size',axis_font_size, ...
     'figure_width',figure_width,'figure_height',figure_height);
 cfg = normalizeConfigLocal(cfg);
+cfg = normalizeModelModeLocal(cfg);
 cfg = normalizeVarianceSourceLocal(cfg);
 cfg.delta_names = {'acr_vs_wit','ff_vs_fb'};
 cfg.delta_labels = {'acr vs. wit','ff vs. fb'};
@@ -128,7 +140,7 @@ cfg.delta_definitions = {'Across - Within','Feedforward - Feedback'};
 out_base = sprintf('GPLrawVar_%s_r%03d_%s_%s_%s_%s', ...
     safeTagLocal(cfg.data_content),cfg.runIdx,cfg.mapping_tag, ...
     cfg.condition_display_mode,filterTagLocal(cfg,records),cfg.plot_style);
-out_base = [out_base '_' cfg.source_tag];
+out_base = [out_base '_' cfg.mode_tag '_' cfg.source_tag];
 MultiSessionRawVar = packRawDeltaSummaryLocal(records,skipped,cfg,out_base);
 if cfg.save_mat || (cfg.make_plots && (cfg.save_fig || cfg.save_png || cfg.save_svg))
     ensureOutputDirLocal(cfg.output_dir);
@@ -213,6 +225,8 @@ function M = packRawDeltaSummaryLocal(records,skipped,cfg,outBase)
     M.meta.raw_definition = 'sum over category latents and selected class neurons / class neuron count';
     M.meta.delta_unit = 'squared units of data_content per neuron';
     M.meta.invalid_neurons = 'excluded from class means; retained in source ID alignment';
+    M.meta.model_mode = cfg.model_mode;
+    M.meta.mode_tag = cfg.mode_tag;
     M.meta.variance_source = cfg.variance_source;
     M.meta.uncertainty_included = cfg.uncertainty_included_effective;
     if strcmp(cfg.variance_source,'posterior')
@@ -289,7 +303,7 @@ function fig = plotRawDeltaSummaryLocal(M,g,cfg)
             'FontName',cfg.font_name,'FontSize',cfg.axis_font_size,'Clipping','off');
     end
     ylabel(ax,cfg.delta_y_label,'Interpreter','none');
-    title(ax,{sprintf('%s | %s | %s',cfg.group_display_names{g},cfg.data_content,[cfg.source_tag ' | ' cfg.DSL_filter]), ...
+    title(ax,{sprintf('%s | %s | %s',cfg.group_display_names{g},cfg.data_content,[cfg.model_description ' | ' cfg.source_tag ' | ' cfg.DSL_filter]), ...
         sprintf('%s (%d sessions)',displayText,M.meta.num_sessions)},'Interpreter','none');
     grid(ax,'on'); box(ax,'off');
     if separate
@@ -457,6 +471,7 @@ function rec = readSessionLocal(sessionDir,cfg,needClasses)
     validateattributes(V.meta.DSL_threshold,{'numeric'},{'scalar','finite'});
     rec = struct();
     rec.session_dir = sessionDir;
+    rec.model_mode = cfg.model_mode;
     [parent,name] = fileparts(sessionDir);
     [~,parentName] = fileparts(parent);
     rec.session_name = [parentName '/' name];
@@ -1334,10 +1349,32 @@ end
 
 
 
+function cfg = normalizeModelModeLocal(cfg)
+    switch lower(strtrim(char(cfg.model_mode)))
+        case {'each_condition','condition_specific_models'}
+            cfg.model_mode = 'each_condition';
+            cfg.mode_tag = 'eachcond';
+            cfg.model_dir = 'each_condition_mode';
+            cfg.model_description = 'Each-condition models';
+        case {'all_condition','all_condition_model'}
+            cfg.model_mode = 'all_condition';
+            cfg.mode_tag = 'allcond';
+            cfg.model_dir = 'all_condition_mode';
+            cfg.model_description = 'All-condition model';
+        otherwise
+            error('model_mode must be each_condition or all_condition.');
+    end
+    cfg.output_dir = fullfile(cfg.root_dir,cfg.model_dir);
+end
+
 function cfg = normalizeVarianceSourceLocal(cfg)
     cfg.variance_source = lower(strtrim(char(cfg.variance_source)));
     if ~ismember(cfg.variance_source,{'model','posterior'})
         error('variance_source must be model or posterior.');
+    end
+    if strcmp(cfg.model_mode,'all_condition') && strcmp(cfg.variance_source,'model')
+        error(['all_condition + model is not supported. Use variance_source = ', ...
+            '''posterior'' for all_condition, or model_mode = ''each_condition''.']);
     end
     v = cfg.uncertainty_included;
     if ~(islogical(v) || isnumeric(v)) || ~isscalar(v) || ~ismember(double(v),[0 1])
@@ -1364,20 +1401,100 @@ function cfg = normalizeVarianceSourceLocal(cfg)
     end
 end
 
-function rec = readPosteriorSessionLocal(sessionDir,cfg,needClasses)
-    summaryFile = fullfile(sessionDir,'each_condition_mode','posterior_rawvar', ...
-        sprintf('postVar_%s_r%03d_u%d.mat',cfg.data_content,cfg.runIdx,cfg.uncertainty_included));
-    if ~isfile(summaryFile)
-        error(['Missing %s. Run posterior_rawvar_each_condition_mode.m in this ', ...
-            'session with the matching uncertainty_included setting.'],summaryFile);
+function [filename,usedLegacy] = posteriorSummaryFileLocal(sessionDir,cfg)
+    filename = fullfile(sessionDir,cfg.model_dir,'posterior_rawvar', ...
+        sprintf('postVar_%s_r%03d_%s_u%d.mat',cfg.data_content,cfg.runIdx, ...
+        cfg.mode_tag,cfg.uncertainty_included));
+    usedLegacy = false;
+    if isfile(filename), return; end
+    % Only each-condition mode may use an old, untagged v1 file. A present
+    % new file is authoritative; validation errors never trigger fallback.
+    if strcmp(cfg.model_mode,'each_condition')
+        legacy = fullfile(sessionDir,'each_condition_mode','posterior_rawvar', ...
+            sprintf('postVar_%s_r%03d_u%d.mat',cfg.data_content,cfg.runIdx,cfg.uncertainty_included));
+        if isfile(legacy)
+            filename = legacy;
+            usedLegacy = true;
+            fprintf('Using legacy each-condition posterior file: %s\n',filename);
+            return;
+        end
     end
+    error(['Missing %s. Run posterior_rawvar.m in this session with matching ', ...
+        'data_condition (1:16 for each_condition; [] for all_condition), ', ...
+        'data_content, runIdx and uncertainty_included.'],filename);
+end
+
+function validatePosteriorModeLocal(P,cfg,usedLegacy)
+    version = char(P.format_version);
+    if strcmp(version,'posterior_rawvar_eachcond_v1')
+        if ~usedLegacy || ~strcmp(cfg.model_mode,'each_condition')
+            error('Legacy posterior data are valid only at the old each-condition path.');
+        end
+        if isfield(P.meta,'model_mode') && ~strcmp(char(P.meta.model_mode),'each_condition')
+            error('Legacy posterior model mode is inconsistent.');
+        end
+        return;
+    end
+    if ~strcmp(version,'posterior_rawvar_v2')
+        error('Unsupported PosteriorRawVar format: %s.',version);
+    end
+    requireFieldsLocal(P.meta,{'model_mode','mode_tag','data_condition'},'PosteriorRawVar.meta');
+    if ~strcmp(char(P.meta.model_mode),cfg.model_mode) || ~strcmp(char(P.meta.mode_tag),cfg.mode_tag)
+        error('Posterior model mode disagrees with model_mode; results are not mixed.');
+    end
+    if strcmp(cfg.model_mode,'all_condition')
+        if ~isempty(P.meta.data_condition)
+            error('All-condition posterior metadata must record data_condition = [].');
+        end
+    elseif ~isequal(sort(double(P.meta.data_condition(:))),sort(double([P.condition.condition_id]')))
+        error('Each-condition posterior selection disagrees with its condition entries.');
+    end
+    trialIds = [];
+    for ci = 1:numel(P.condition)
+        E = P.condition(ci);
+        requireFieldsLocal(E,{'model_mode','model_condition_id','bestmodel_file', ...
+            'condition_id','n_trials','trial_ids','group'},'PosteriorRawVar.condition');
+        if ~strcmp(char(E.model_mode),cfg.model_mode)
+            error('A posterior condition has a different model mode.');
+        end
+        if strcmp(cfg.model_mode,'each_condition')
+            if ~isequal(double(E.model_condition_id),double(E.condition_id))
+                error('Condition-specific model ID disagrees with its output condition.');
+            end
+        else
+            if ~isempty(E.model_condition_id) || ...
+                    ~strcmp(char(E.bestmodel_file),char(P.condition(1).bestmodel_file))
+                error('All-condition posterior entries must come from one shared model.');
+            end
+            ids = double(E.trial_ids(:)');
+            if numel(ids) ~= E.n_trials || any(~isfinite(ids) | ids<1 | ids~=round(ids))
+                error('Invalid trial IDs in all-condition posterior output.');
+            end
+            trialIds = [trialIds ids]; %#ok<AGROW>
+            if numel(E.group) ~= numel(P.condition(1).group)
+                error('All-condition model group count changes across conditions.');
+            end
+            for g = 1:numel(E.group)
+                G = E.group(g); reference = P.condition(1).group(g);
+                if ~isequal(G.counts,reference.counts) || G.nLatents ~= reference.nLatents || ...
+                        ~isequal(G.category_indices,reference.category_indices)
+                    error('All-condition latent classification changes across conditions.');
+                end
+            end
+        end
+    end
+    if numel(unique(trialIds)) ~= numel(trialIds)
+        error('An all-condition posterior trial appears in more than one condition.');
+    end
+end
+
+function rec = readPosteriorSessionLocal(sessionDir,cfg,needClasses)
+    [summaryFile,usedLegacy] = posteriorSummaryFileLocal(sessionDir,cfg);
     S = load(summaryFile,'PosteriorRawVar');
     requireFieldsLocal(S,{'PosteriorRawVar'},summaryFile);
     P = S.PosteriorRawVar;
     requireFieldsLocal(P,{'format_version','meta','labels','condition_ids','condition','group'},summaryFile);
-    if ~strcmp(P.format_version,'posterior_rawvar_eachcond_v1')
-        error('Unsupported PosteriorRawVar format in %s.',summaryFile);
-    end
+    validatePosteriorModeLocal(P,cfg,usedLegacy);
     requireFieldsLocal(P.meta,{'data_content','runIdx','uncertainty_included', ...
         'variance_source','DSL_filter','variance_method','variance_normalization', ...
         'conditionShortLabels','dirValues'},'PosteriorRawVar.meta');
@@ -1418,6 +1535,9 @@ function rec = readPosteriorSessionLocal(sessionDir,cfg,needClasses)
     rec.session_name = [parentName '/' name];
     rec.summary_file = summaryFile; rec.direction_values = dirs;
     rec.condition_labels = cfg.condition_labels; rec.DSL_threshold = NaN;
+    rec.model_mode = cfg.model_mode;
+    rec.used_legacy_posterior_file = usedLegacy;
+    rec.input_format_version = P.format_version;
     rec.variance_source = 'posterior'; rec.uncertainty_included = cfg.uncertainty_included;
     rec.variance_method = P.meta.variance_method;
     rec.variance_normalization = P.meta.variance_normalization;
@@ -1458,6 +1578,8 @@ function rec = readPosteriorSessionLocal(sessionDir,cfg,needClasses)
         end
         rec.group(g).all_neurons = baseline;
         if needClasses
+            % Assign a complete typed array before indexing any group/class.
+            rec.group(g).population = repmat(emptyPosteriorBlockLocal('',''),1,3);
             for c = 1:3
                 rec.group(g).population(c) = emptyPosteriorBlockLocal(cfg.class_names{c},cfg.class_labels{c});
             end
