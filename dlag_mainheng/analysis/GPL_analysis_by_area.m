@@ -22,7 +22,10 @@
 % 10. Build pattern and component predictions for the plaid tuning curve.
 % 11. Compute ordinary correlations, partial correlations, Fisher Z values,
 %    pattern index PI = Zp - Zc, and pattern/component classification.
-% 12. Save numerical results and all figures as both PNG and FIG files.
+% 12. Plot raw or baseline-subtracted tuning, matching subtract_spontaneous.
+% 13. Label grating panels with model-local ID, DI and OSI; plaid with ID, PI.
+% 14. Optionally plot cells in one inclusive OSI range, separately per group.
+% 15. Save the original MAT and each PNG/FIG independently, if requested.
 %
 % Stimulus-design handling:
 % - The number and spacing of grating/plaid directions are read from data.
@@ -47,6 +50,8 @@
 % - Group1_V1_Plaid_tuning_SEM-or-SD.png and .fig
 % - Group1_V1_DI_OSI_distribution.png and .fig
 % - Group1_V1_Pattern_component_analysis.png and .fig
+% - Baseline-subtracted tuning filenames additionally contain _sponsub.
+% - OSI-selected tuning filenames additionally contain OSI_<min>_to_<max>.
 %
 % One MAT is saved per probe/kilosort folder. All mapped model groups on that
 % probe are stored in gpl_results.group. Use gpl_results.group_indices and
@@ -70,6 +75,20 @@
 %    labels alone cannot distinguish two such populations.
 % 8. Figure filenames contain both model-group index and area name. The MAT
 %    filename remains unchanged and contains all groups for that probe.
+% 9. MAT compatibility: existing result fields, nesting, unit order and
+%    numerical calculations are unchanged. New save/OSI display options
+%    are not added to gpl_results. Existing .files tuning paths follow the
+%    actual raw/_sponsub figure names, even when saving is disabled.
+% 10. ID means the 1-based neuron position within the target MODEL GROUP,
+%     as in reconstruction_visualization_case_example, for the same target
+%     run and retained unit population. It is NOT a Kilosort cluster ID or
+%     the panel number. target_unit_index preserves gaps when GPL data are
+%     missing for some target neurons. Depth sorting/OSI selection do not
+%     renumber cells. With nan_trial_strategy == 6, this existing GPL analysis
+%     selects the target raw_fr population; reconstruction IDs agree when
+%     the reconstruction uses that same retained population.
+% 11. Run GPL_tuning_case_neuron separately to select model-local IDs from
+%     an existing result MAT and export one grating+plaid figure per cell.
 % =========================================================================
 
 clc;
@@ -93,7 +112,8 @@ group_names = {'V1', 'MT'};
 gpl_stim_tag = '[dir12_gpl_2_200isi_fixedphase]';
 
 % Whether DI, OSI, and the component predictor use spontaneous/baseline
-% firing rates. Raw grating/plaid tuning figures remain on the raw FR scale.
+% firing rates. Tuning figures also follow this option: true uses the saved
+% trial-wise baseline-subtracted mean AND its corresponding SD/SEM.
 subtract_spontaneous = true;
 
 % Requested baseline version. The program requires one unique index entry
@@ -125,8 +145,34 @@ distribution_bar_width = 0.82;      % < 1 leaves a gap between bars
 %   unit_gpl_results_sponsub.mat
 gpl_mat_name = 'unit_gpl_results.mat';
 
+% Additional tuning grids selected by grating OSI, separately for each area.
+% Both endpoints are INCLUDED. NaN/Inf OSI values are excluded. The same
+% cells appear in grating and plaid, in the original depth-descending order.
+plot_osi_selected_tuning = true;
+osi_range = [0.3 0.7];
+
+% Independent file-saving switches. Turning a switch off does not stop the
+% corresponding calculation or figure creation. The MAT format stays the
+% same as before; only whether it is written is controlled here.
+save_mat = true;
+save_grating_tuning_png = true;
+save_grating_tuning_fig = true;
+save_plaid_tuning_png = true;
+save_plaid_tuning_fig = true;
+save_selectivity_png = true;
+save_selectivity_fig = true;
+save_pattern_component_png = true;
+save_pattern_component_fig = true;
+save_osi_grating_tuning_png = true;
+save_osi_grating_tuning_fig = true;
+save_osi_plaid_tuning_png = true;
+save_osi_plaid_tuning_fig = true;
+
 % Figure visibility while the script runs: 'on' or 'off'.
 figure_visibility = 'on';
+% false leaves figures open, including when no files are saved.
+% true closes each figure after processing its optional file exports.
+close_after_save = false;
 
 %% ----------------------- Validate user parameters -----------------------
 group_names = normalize_text_list_local(group_names, 'group_names');
@@ -207,6 +253,38 @@ end
 if ~any(strcmp(lower(char(figure_visibility)), {'on', 'off'}))
     error('figure_visibility must be ''on'' or ''off''.');
 end
+
+logical_option_names = { ...
+    'plot_osi_selected_tuning', 'save_mat', ...
+    'save_grating_tuning_png', 'save_grating_tuning_fig', ...
+    'save_plaid_tuning_png', 'save_plaid_tuning_fig', ...
+    'save_selectivity_png', 'save_selectivity_fig', ...
+    'save_pattern_component_png', 'save_pattern_component_fig', ...
+    'save_osi_grating_tuning_png', 'save_osi_grating_tuning_fig', ...
+    'save_osi_plaid_tuning_png', 'save_osi_plaid_tuning_fig', ...
+    'close_after_save'};
+logical_option_values = { ...
+    plot_osi_selected_tuning, save_mat, ...
+    save_grating_tuning_png, save_grating_tuning_fig, ...
+    save_plaid_tuning_png, save_plaid_tuning_fig, ...
+    save_selectivity_png, save_selectivity_fig, ...
+    save_pattern_component_png, save_pattern_component_fig, ...
+    save_osi_grating_tuning_png, save_osi_grating_tuning_fig, ...
+    save_osi_plaid_tuning_png, save_osi_plaid_tuning_fig, ...
+    close_after_save};
+for option_idx = 1:numel(logical_option_names)
+    option_value = logical_option_values{option_idx};
+    if ~islogical(option_value) || ~isscalar(option_value)
+        error('%s must be one logical scalar (true or false).', ...
+            logical_option_names{option_idx});
+    end
+end
+
+if ~isnumeric(osi_range) || ~isreal(osi_range) || numel(osi_range) ~= 2 || ...
+        any(~isfinite(osi_range(:))) || osi_range(1) > osi_range(2)
+    error('osi_range must be [minimum maximum], finite with minimum <= maximum.');
+end
+osi_range = double(osi_range(:)');
 
 %% ----------------------- Build shared session paths -----------------------
 run_g = sprintf('%s_g%d', runName, runind);
@@ -383,12 +461,12 @@ for probe_list_idx = 1:numel(probes_to_process)
                     baseline_data, ...
                     baseline_source);
 
-                % Tuning figures always show raw firing-rate tuning, so their
-                % filenames are shared by raw and spontaneous-subtracted modes.
-                base_grating = sprintf('%s_Grating_tuning_%s', ...
-                    selection.group_file_tag, error_method);
-                base_plaid = sprintf('%s_Plaid_tuning_%s', ...
-                    selection.group_file_tag, error_method);
+                % Preserve raw-mode names; distinguish baseline-subtracted
+                % tuning with the same _sponsub suffix used by the analysis.
+                base_grating = sprintf('%s_Grating_tuning_%s%s', ...
+                    selection.group_file_tag, error_method, output_suffix);
+                base_plaid = sprintf('%s_Plaid_tuning_%s%s', ...
+                    selection.group_file_tag, error_method, output_suffix);
 
                 % Selectivity and pattern/component results change with
                 % baseline subtraction, so these names receive _sponsub.
@@ -459,7 +537,9 @@ for probe_list_idx = 1:numel(probes_to_process)
 
             % Save once before plotting so all numerical results remain
             % available even if a later figure export fails.
-            save(gpl_results.files.mat, 'gpl_results');
+            if save_mat
+                save(gpl_results.files.mat, 'gpl_results');
+            end
 
             %% ----------------------- Plot every group on this probe -----------------------
             for local_group_idx = 1:numel(group_results)
@@ -469,31 +549,109 @@ for probe_list_idx = 1:numel(probes_to_process)
                 group_display_name = sprintf( ...
                     'Group %d: %s', model_group_index, group_name);
 
+                model_local_ids = get_model_local_ids_for_plot_local(this_result);
+                grating_panel_labels = make_tuning_panel_labels_local( ...
+                    model_local_ids, this_result.grating.DI, ...
+                    this_result.grating.OSI, this_result.plaid.PI, 'grating');
+                plaid_panel_labels = make_tuning_panel_labels_local( ...
+                    model_local_ids, this_result.grating.DI, ...
+                    this_result.grating.OSI, this_result.plaid.PI, 'plaid');
+                [grating_mean_for_plot, grating_error_for_plot] = ...
+                    get_tuning_display_local(this_result.grating, ...
+                    error_method, subtract_spontaneous);
+                [plaid_mean_for_plot, plaid_error_for_plot] = ...
+                    get_tuning_display_local(this_result.plaid, ...
+                    error_method, subtract_spontaneous);
+                if subtract_spontaneous
+                    tuning_state_label = ', baseline subtracted';
+                else
+                    tuning_state_label = '';
+                end
+
                 fig = plot_direction_tuning( ...
                     this_result.grating.directions, ...
-                    this_result.grating.mean_fr, ...
-                    select_error_matrix(this_result.grating, error_method), ...
+                    grating_mean_for_plot, grating_error_for_plot, ...
                     this_result.plot.depth_desc_order, ...
-                    sprintf('%s grating tuning (%s)', ...
-                    group_display_name, error_method), ...
-                    figure_visibility);
+                    sprintf('%s grating tuning (%s%s)', ...
+                    group_display_name, error_method, tuning_state_label), ...
+                    figure_visibility, grating_panel_labels);
                 save_figure_pair(fig, ...
                     this_result.files.grating_png, ...
-                    this_result.files.grating_fig);
-                close(fig);
+                    this_result.files.grating_fig, ...
+                    save_grating_tuning_png, save_grating_tuning_fig, ...
+                    close_after_save);
 
                 fig = plot_direction_tuning( ...
                     this_result.plaid.directions, ...
-                    this_result.plaid.mean_fr, ...
-                    select_error_matrix(this_result.plaid, error_method), ...
+                    plaid_mean_for_plot, plaid_error_for_plot, ...
                     this_result.plot.depth_desc_order, ...
-                    sprintf('%s plaid tuning (%s)', ...
-                    group_display_name, error_method), ...
-                    figure_visibility);
+                    sprintf('%s plaid tuning (%s%s)', ...
+                    group_display_name, error_method, tuning_state_label), ...
+                    figure_visibility, plaid_panel_labels);
                 save_figure_pair(fig, ...
                     this_result.files.plaid_png, ...
-                    this_result.files.plaid_fig);
-                close(fig);
+                    this_result.files.plaid_fig, ...
+                    save_plaid_tuning_png, save_plaid_tuning_fig, ...
+                    close_after_save);
+
+                % OSI selection only affects the display. Do not filter or
+                % renumber the numerical results stored in gpl_results.
+                if plot_osi_selected_tuning
+                    osi_values = this_result.grating.OSI(:);
+                    osi_keep = isfinite(osi_values) & ...
+                        osi_values >= osi_range(1) & ...
+                        osi_values <= osi_range(2);
+                    depth_order = this_result.plot.depth_desc_order(:);
+                    osi_plot_order = depth_order(osi_keep(depth_order));
+
+                    fprintf('  Group %d (%s): OSI in [%g, %g], %d/%d cells.\n', ...
+                        model_group_index, group_name, osi_range(1), ...
+                        osi_range(2), numel(osi_plot_order), numel(osi_values));
+
+                    if ~isempty(osi_plot_order)
+                        osi_file_tag = make_osi_range_tag_local(osi_range);
+                        osi_title = sprintf('OSI in [%g, %g], n = %d', ...
+                            osi_range(1), osi_range(2), numel(osi_plot_order));
+                        base_osi_grating = sprintf( ...
+                            '%s_Grating_tuning_%s_OSI_%s%s', ...
+                            this_result.group_file_tag, error_method, ...
+                            osi_file_tag, output_suffix);
+                        base_osi_plaid = sprintf( ...
+                            '%s_Plaid_tuning_%s_OSI_%s%s', ...
+                            this_result.group_file_tag, error_method, ...
+                            osi_file_tag, output_suffix);
+
+                        fig = plot_direction_tuning( ...
+                            this_result.grating.directions, ...
+                            grating_mean_for_plot, grating_error_for_plot, ...
+                            osi_plot_order, ...
+                            sprintf('%s grating tuning (%s%s), %s', ...
+                            group_display_name, error_method, ...
+                            tuning_state_label, osi_title), ...
+                            figure_visibility, grating_panel_labels);
+                        save_figure_pair(fig, ...
+                            fullfile(ksDir, [base_osi_grating '.png']), ...
+                            fullfile(ksDir, [base_osi_grating '.fig']), ...
+                            save_osi_grating_tuning_png, ...
+                            save_osi_grating_tuning_fig, close_after_save);
+
+                        fig = plot_direction_tuning( ...
+                            this_result.plaid.directions, ...
+                            plaid_mean_for_plot, plaid_error_for_plot, ...
+                            osi_plot_order, ...
+                            sprintf('%s plaid tuning (%s%s), %s', ...
+                            group_display_name, error_method, ...
+                            tuning_state_label, osi_title), ...
+                            figure_visibility, plaid_panel_labels);
+                        save_figure_pair(fig, ...
+                            fullfile(ksDir, [base_osi_plaid '.png']), ...
+                            fullfile(ksDir, [base_osi_plaid '.fig']), ...
+                            save_osi_plaid_tuning_png, ...
+                            save_osi_plaid_tuning_fig, close_after_save);
+                    else
+                        fprintf('  No cells in this OSI range; no selected tuning grids.\n');
+                    end
+                end
 
                 fig = plot_di_osi_distributions( ...
                     this_result.grating.DI, ...
@@ -505,8 +663,9 @@ for probe_list_idx = 1:numel(probes_to_process)
                     subtract_spontaneous);
                 save_figure_pair(fig, ...
                     this_result.files.selectivity_png, ...
-                    this_result.files.selectivity_fig);
-                close(fig);
+                    this_result.files.selectivity_fig, ...
+                    save_selectivity_png, save_selectivity_fig, ...
+                    close_after_save);
 
                 fig = plot_pattern_component_analysis( ...
                     this_result.plaid.Zp, ...
@@ -521,18 +680,22 @@ for probe_list_idx = 1:numel(probes_to_process)
                     figure_visibility);
                 save_figure_pair(fig, ...
                     this_result.files.pattern_component_png, ...
-                    this_result.files.pattern_component_fig);
-                close(fig);
+                    this_result.files.pattern_component_fig, ...
+                    save_pattern_component_png, save_pattern_component_fig, ...
+                    close_after_save);
 
-                fprintf('  Saved Group %d (%s) figures.\n', ...
+                fprintf('  Finished Group %d (%s) figures.\n', ...
                     model_group_index, group_name);
             end
 
-            % Save again after all expected output paths have been recorded.
-            save(gpl_results.files.mat, 'gpl_results');
-
-            fprintf('Saved probe-level GPL MAT:\n  %s\n', ...
-                gpl_results.files.mat);
+            % Retain the original MAT content and save timing when enabled.
+            if save_mat
+                save(gpl_results.files.mat, 'gpl_results');
+                fprintf('Saved probe-level GPL MAT:\n  %s\n', ...
+                    gpl_results.files.mat);
+            else
+                fprintf('MAT saving disabled for probe %d: %s\n', thisProbe, ksDir);
+            end
 
         catch ME
             fprintf(2, 'Error for probe %d, ksDir %s\n', ...
@@ -2553,7 +2716,7 @@ end
 
 function fig = plot_direction_tuning( ...
         directions, mean_fr, err_fr, plot_order, ...
-        figure_title, visibility)
+        figure_title, visibility, panel_labels)
 % Plot one compact direction-tuning subplot per neuron.
 %
 % Each neuron uses its own y-axis range, determined from that neuron's
@@ -2574,15 +2737,24 @@ function fig = plot_direction_tuning( ...
         error('Error matrix size does not match mean tuning matrix size.');
     end
 
-    if numel(plot_order) ~= nUnit
-        error('plot_order length does not match neuron count.');
+    plot_order = double(plot_order(:));
+    if isempty(plot_order) || any(~isfinite(plot_order)) || ...
+            any(plot_order ~= round(plot_order)) || ...
+            any(plot_order < 1 | plot_order > nUnit) || ...
+            numel(unique(plot_order)) ~= numel(plot_order)
+        error('plot_order must contain unique valid row indices.');
     end
 
-    nCols = ceil(sqrt(nUnit));
-    nRows = ceil(nUnit / nCols);
+    if ~iscell(panel_labels) || numel(panel_labels) ~= nUnit
+        error('panel_labels must contain one title per tuning-matrix row.');
+    end
+
+    nPlot = numel(plot_order);
+    nCols = ceil(sqrt(nPlot));
+    nRows = ceil(nPlot / nCols);
 
     fig_width = max(900, 180 * nCols);
-    fig_height = max(700, 145 * nRows);
+    fig_height = max(700, 180 * nRows);
 
     fig = figure( ...
         'Color', 'w', ...
@@ -2594,12 +2766,14 @@ function fig = plot_direction_tuning( ...
     % Embedded vertical padding for every individual neuron.
     ylim_padding_fraction = 0.10;
 
-    for ii = 1:nUnit
+    for ii = 1:nPlot
 
         u = plot_order(ii);
 
         ax = subplot(nRows, nCols, ii, 'Parent', fig);
         hold(ax, 'on');
+        title(ax, panel_labels{u}, 'Interpreter', 'none', ...
+            'FontWeight', 'normal', 'FontSize', 8);
 
         r_mean = mean_fr(u, :);
         r_err = err_fr(u, :);
@@ -3247,9 +3421,102 @@ function plot_z_classification_boundaries( ...
     end
 end
 
-function save_figure_pair(fig, png_file, fig_file)
-% Save one MATLAB figure as both a high-resolution PNG and a FIG file.
+function save_figure_pair(fig, png_file, fig_file, save_png, save_fig, close_after_save)
+% Handle each output independently, including display-only figures.
 
-    savefig(fig, fig_file);
-    print(fig, png_file, '-dpng', '-r300');
+    if save_fig
+        savefig(fig, fig_file);
+    end
+    if save_png
+        print(fig, png_file, '-dpng', '-r300');
+    end
+    if close_after_save
+        close(fig);
+    end
+end
+
+function local_ids = get_model_local_ids_for_plot_local(result)
+% Keep target-model positions, including gaps for units absent from GPL.
+% Do not use used_neuron_index: that field numbers the retained GPL rows.
+
+    required = {'target_unit_index', 'target_unit_ids', 'used_unit_ids'};
+    for k = 1:numel(required)
+        if ~isfield(result, required{k})
+            error('GPL result is missing the ID mapping field %s.', required{k});
+        end
+    end
+    local_ids = double(result.target_unit_index(:));
+    target_ids = double(result.target_unit_ids(:));
+    used_ids = double(result.used_unit_ids(:));
+    nUnit = size(result.grating.mean_fr, 1);
+
+    if numel(local_ids) ~= nUnit || numel(used_ids) ~= nUnit || ...
+            any(~isfinite(local_ids)) || ...
+            any(local_ids ~= round(local_ids)) || ...
+            any(local_ids < 1 | local_ids > numel(target_ids)) || ...
+            numel(unique(local_ids)) ~= numel(local_ids)
+        error('Invalid target-unit mapping for model-local tuning IDs.');
+    end
+    if ~isequal(target_ids(local_ids), used_ids)
+        error('Target-unit and GPL-unit identities do not match the stored mapping.');
+    end
+end
+
+function labels = make_tuning_panel_labels_local(local_ids, DI, OSI, PI, kind)
+% Labels remain aligned to tuning-matrix rows, independent of panel order.
+
+    local_ids = local_ids(:);
+    DI = DI(:);
+    OSI = OSI(:);
+    PI = PI(:);
+    nUnit = numel(local_ids);
+    if any([numel(DI), numel(OSI), numel(PI)] ~= nUnit)
+        error('The number of indices does not match the number of tuning rows.');
+    end
+    labels = cell(nUnit, 1);
+    for u = 1:nUnit
+        if strcmp(kind, 'grating')
+            labels{u} = sprintf('ID %d\nDI=%.3f  OSI=%.3f', ...
+                local_ids(u), DI(u), OSI(u));
+        elseif strcmp(kind, 'plaid')
+            labels{u} = sprintf('ID %d\nPI=%.3f', local_ids(u), PI(u));
+        else
+            error('Unknown tuning kind: %s', kind);
+        end
+    end
+end
+
+function [mean_fr, err_fr] = get_tuning_display_local(tuning, error_method, sponsub)
+% Select matching means and error bands. No index or MAT data are changed.
+
+    if sponsub
+        mean_field = 'sponsub_mean_fr';
+        if strcmpi(error_method, 'SD')
+            error_field = 'sponsub_sd_fr';
+        else
+            error_field = 'sponsub_sem_fr';
+        end
+        if ~isfield(tuning, mean_field) || ~isfield(tuning, error_field)
+            error('Baseline-subtracted tuning or its error band is missing.');
+        end
+        mean_fr = tuning.(mean_field);
+        err_fr = tuning.(error_field);
+    else
+        mean_fr = tuning.mean_fr;
+        err_fr = select_error_matrix(tuning, error_method);
+    end
+    if isempty(mean_fr) || ~isequal(size(mean_fr), size(err_fr))
+        error('The selected tuning mean and error-band sizes are invalid.');
+    end
+end
+
+function tag = make_osi_range_tag_local(osi_range)
+% Keep range information in selected-grid filenames using portable text.
+
+    lower_tag = sprintf('%.15g', osi_range(1));
+    upper_tag = sprintf('%.15g', osi_range(2));
+    tag = [lower_tag '_to_' upper_tag];
+    tag = strrep(tag, '.', 'p');
+    tag = strrep(tag, '-', 'm');
+    tag = strrep(tag, '+', 'p');
 end
