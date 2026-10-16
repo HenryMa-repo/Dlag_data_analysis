@@ -70,12 +70,12 @@ data_content = 'demean_count_within_t_and_condition';
 runIdx = 1;                          % 1 = data; 2 = independently shuffled data
 group_names = {'V1','MT'};            % display labels in MODEL GROUP order
 gpl_mat_name = 'unit_gpl_results_sponsub.mat';
-model_mode = 'each_condition';     % 'each_condition' or 'all_condition'
-variance_source = 'model';          % 'model' or 'posterior'
+model_mode = 'all_condition';     % 'each_condition' or 'all_condition'
+variance_source = 'posterior';          % 'model' or 'posterior'
 uncertainty_included = 0;           % posterior only: 0 = no; 1 = yes
 
 DSL_filter = 'all_latents';           % 'all_latents' or 'DSL_filtered'
-condition_display_mode = 'separate';  % 'separate' or 'pooled' (STIMULUS conditions)
+condition_display_mode = 'pooled';  % 'separate' or 'pooled' (STIMULUS conditions)
 
 save_mat = true;
 save_fig = false;

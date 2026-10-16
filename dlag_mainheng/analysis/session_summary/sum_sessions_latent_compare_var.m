@@ -31,7 +31,10 @@
 %   rawvariance           : category variance SUM / selected NEURON count
 % Sum over latents; do not average across latents. Percentages are ratios
 % of aggregate variances, not means of per-neuron percentages. Independent
-% noise is shown only in rawvariance and percentTotalVariance.
+% noise can be shown in MODEL rawvariance and percentTotalVariance using
+% show_independent_noise. false hides its distributions and x-axis label;
+% the y-axis limits then use only the displayed categories. This display
+% option does not change variance values or percentage denominators.
 %
 % DSL_filtered uses the saved keep mask from latent_compare: an across
 % latent is removed in both groups if either group's DSL >= threshold.
@@ -39,8 +42,11 @@
 % Across/Within partition shared; FF/FB/Ambiguous partition Across, so all
 % five displayed latent categories should not be added or stacked together.
 %
-% Saved MultiSessionSummary contains the exact plotted values, session/dir
-% identity, raw sums, per-neuron means, denominator values and cell counts.
+% Saved MultiSessionSummary retains all metric categories (including noise
+% when applicable), session/dir identity, raw sums, per-neuron means,
+% denominators and cell counts. Its plot.category_indices/category_labels
+% identify the displayed subset. MODEL rawvariance/percentTotalVariance
+% output names include noise0/noise1 so both displays can be saved together.
 % Raw variance units are the squared units of the selected data_content.
 
 % Model and variance-source selection:
@@ -81,6 +87,7 @@ uncertainty_included = 0;           % posterior only: 0 = no; 1 = yes
 
 metric_name = 'rawvariance';
 % 'percentLatents', 'percentSharedVariance', 'percentTotalVariance', 'rawvariance'
+show_independent_noise = false;    % false = hide; true = show (MODEL raw/total only)
 condition_display_mode = 'pooled';  % 'pooled' or 'separate' (NEURON classes)
 DSL_filter = 'all_latents';          % 'all_latents' or 'DSL_filtered'
 
@@ -94,12 +101,12 @@ make_plots = true;
 figure_visible = 'on';
 print_full_error_report = false;
 
-plot_style = 'points_median';        % 'points_median', 'bar_points', 'violin'
+plot_style = 'bar_points';        % 'points_median', 'bar_points', 'violin'
 plot_show_mean = struct('bar_points',true,'violin',false,'points_median',false);
 plot_show_median = struct('bar_points',false,'violin',true,'points_median',true);
 point_size = 50;
 point_alpha = 0.70;
-point_jitter_width = 0.040;
+point_jitter_width = 0.020;
 violin_width = 0.085;
 violin_alpha = 0.28;
 bar_width = 0.075;
@@ -118,6 +125,7 @@ cfg = struct('root_dir',root_dir,'data_content',data_content,'runIdx',runIdx, ..
     'group_names',{group_names},'gpl_mat_name',gpl_mat_name, ...
     'model_mode',model_mode,'variance_source',variance_source, ...
     'uncertainty_included',uncertainty_included, ...
+    'show_independent_noise',show_independent_noise, ...
     'condition_display_mode',condition_display_mode,'DSL_filter',DSL_filter, ...
     'save_mat',save_mat,'save_fig',save_fig,'save_png',save_png,'save_svg',save_svg, ...
     'png_dpi',png_dpi,'close_after_save',close_after_save,'make_plots',make_plots, ...
@@ -157,6 +165,9 @@ out_base = sprintf('sumLV_%s_r%03d_%s_%s_%s_%s_%s', ...
     safeTagLocal(cfg.data_content),cfg.runIdx,cfg.mapping_tag,cfg.metric_tag, ...
     populationTag,filterTagLocal(cfg,records),cfg.plot_style);
 out_base = [out_base '_' cfg.mode_tag '_' cfg.source_tag];
+if strcmp(cfg.variance_source,'model') && ismember(cfg.metric_field,{'raw_mean','percent_total'})
+    out_base = sprintf('%s_noise%d',out_base,cfg.show_independent_noise);
+end
 MultiSessionSummary = packVarianceSummaryLocal(records,skipped,cfg,out_base);
 if cfg.save_mat || (cfg.make_plots && (cfg.save_fig || cfg.save_png || cfg.save_svg))
     ensureOutputDirLocal(cfg.output_dir);
@@ -241,6 +252,13 @@ function M = packVarianceSummaryLocal(records,skipped,cfg,outBase)
     end
     M.labels.categories = labels;
     M.labels.conditions = cfg.condition_labels;
+    % Keep the full data array; select categories only for plotting.
+    M.plot.category_indices = 1:K;
+    if ~cfg.show_independent_noise
+        M.plot.category_indices(strcmpi(labels,'Independent noise')) = [];
+    end
+    M.plot.category_labels = labels(M.plot.category_indices);
+    M.plot.independent_noise_visible = any(strcmpi(M.plot.category_labels,'Independent noise'));
     M.observation_info = observationInfoLocal(records);
     M.session_data = records; % includes raw sums, means, denominators and N
     M.skipped_sessions = skipped;
@@ -271,22 +289,23 @@ function M = packVarianceSummaryLocal(records,skipped,cfg,outBase)
 end
 
 function fig = plotVarianceSummaryLocal(M,g,c,cfg)
-    K = numel(M.labels.categories);
+    categoryIndices = M.plot.category_indices;
+    K = numel(categoryIndices);
     fig = figure('Visible',cfg.figure_visible, ...
         'Position',[100 100 cfg.figure_width cfg.figure_height]);
     ax = axes(fig); hold(ax,'on');
     offsets = linspace(-0.36,0.36,8);
     for k = 1:K
         for p = 1:8
-            y = reshape(M.values(:,g,c,p,k),[],1);
+            y = reshape(M.values(:,g,c,p,categoryIndices(k)),[],1);
             drawDistributionLocal(ax,k+offsets(p),y,cfg.condition_colors(p,:),cfg,1, ...
                 100000*g+10000*c+100*k+p);
         end
     end
-    set(ax,'XTick',1:K,'XTickLabel',M.labels.categories,'TickLabelInterpreter','none', ...
+    set(ax,'XTick',1:K,'XTickLabel',M.plot.category_labels,'TickLabelInterpreter','none', ...
         'FontName',cfg.font_name,'FontSize',cfg.axis_font_size);
     xtickangle(ax,30); xlim(ax,[0.45 K+0.55]);
-    allValues = reshape(M.values(:,g,c,:,:),[],1);
+    allValues = reshape(M.values(:,g,c,:,categoryIndices),[],1);
     if strcmp(cfg.metric_field,'raw_mean')
         positiveValues = allValues(isfinite(allValues) & allValues>0);
         if isempty(positiveValues)
@@ -351,7 +370,8 @@ function cfg = normalizeConfigLocal(cfg)
     cfg.show_mean = logical(cfg.plot_show_mean.(cfg.plot_style));
     cfg.show_median = logical(cfg.plot_show_median.(cfg.plot_style));
     flags = {'make_plots','save_mat','save_fig','save_png','save_svg', ...
-        'close_after_save','print_full_error_report','show_mean','show_median'};
+        'close_after_save','print_full_error_report','show_mean','show_median', ...
+        'show_independent_noise'};
     for k = 1:numel(flags)
         x = cfg.(flags{k});
         if ~isscalar(x) || ~isfinite(double(x)) || ~ismember(double(x),[0 1])
