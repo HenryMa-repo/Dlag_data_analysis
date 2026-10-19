@@ -1,7 +1,7 @@
 %% sum_GPL_index_by_area.m
 % Pool area-specific GPL selectivity and pattern/component indices across
 % sessions using an explicit model-group/probe/area mapping.
-% Revision: 2026-08-20b
+% Revision: 2026-10-16 (scatter appearance and invalid-ID reporting only)
 %
 % Run GPL_analysis_by_area.m first for every session/probe. This script reads
 % the resulting probe-level unit_gpl_results.mat or
@@ -21,15 +21,22 @@
 %
 % Plot encoding:
 %   color = model group;
-%   marker shape in the Fisher-Z scatter = GPL class:
-%       pattern       : circle
-%       component     : square
-%       unclassified  : upward triangle
+%   Fisher-Z scatter = filled circles in the model-group/area color, with
+%   no marker outlines or class-shape legend. Point size is adjustable.
 %
 % Every neuron is pooled directly. Session identity is saved in the MAT
 % output but is intentionally not encoded by color shade in any figure.
 % Invalid GPL-classification neurons remain in the saved alignment data but
 % are excluded from the Fisher-Z scatter and PI distribution.
+% Final Command Window summaries list OSI-invalid, DSI-invalid and
+% GPL-classification-invalid neurons separately for each included session
+% and model group/area. Only nonempty categories are listed, with full IDs.
+% IDs are the 1-based target-model GROUP-local positions, not Kilosort IDs
+% or pooled row numbers. target_unit_index is checked against target_unit_ids
+% and used_unit_ids. Missing GPL neurons leave gaps in the model-local IDs.
+% Temporary ID-report data are not added to the saved summary MAT. If source
+% ID metadata cannot be verified, report the problem without changing which
+% neurons/sessions enter the numerical analysis or substituting other IDs.
 
 clc;
 clear;
@@ -57,10 +64,10 @@ subtract_spontaneous = true;
 % Saving and figure settings
 % -------------------------------------------------------------------------
 
-save_mat = true;
+save_mat = false;
 
 % save_figure controls both MATLAB FIG and vector SVG output.
-save_figure = true;
+save_figure = false;
 
 figure_visible = 'on';             % 'on' or 'off'
 close_after_save = true;
@@ -121,11 +128,12 @@ direction_index_axis_label = 'Direction selectivity index (DSI)';
 
 class_names = {'pattern', 'component', 'unclassified'};
 class_display_names = {'Pattern', 'Component', 'Unclassified'};
-class_markers = {'o', 's', '^'};
+% Retain the existing class metadata fields; all scatter markers are circles.
+class_markers = {'o', 'o', 'o'};
 
-class_scatter_size = 34;
+% Scatter marker AREA in points squared; reduce/increase this to resize dots.
+class_scatter_size = 12;
 class_scatter_alpha = 0.68;
-class_scatter_line_width = 0.70;
 
 class_boundary_line_style = '--';
 class_boundary_line_width = 1.0;
@@ -140,9 +148,6 @@ pi_bar_alpha = 0.88;
 
 show_pattern_index_neuron_count = true;
 
-% Match the useful lower-right placement of the original GPL_analysis
-% pattern/component scatter legend, but make the location deterministic.
-class_legend_location = 'southeast';
 pattern_figure_size_inches = [9.3, 4.0];
 
 %% ======================== FIXED INPUT RULES ===========================
@@ -263,6 +268,11 @@ class_display_names = normalizeTextCellLocal( ...
     class_display_names, 'class_display_names');
 class_markers = normalizeTextCellLocal(class_markers, 'class_markers');
 
+validateattributes(class_scatter_size, {'numeric'}, ...
+    {'real', 'scalar', 'finite', 'positive'}, mfilename, 'class_scatter_size');
+validateattributes(class_scatter_alpha, {'numeric'}, ...
+    {'real', 'scalar', 'finite', '>=', 0, '<=', 1}, mfilename, 'class_scatter_alpha');
+
 z_axis_limits = validateOptionalAxisLimitsLocal( ...
     z_axis_limits, 'z_axis_limits');
 pi_axis_limits = validateOptionalAxisLimitsLocal( ...
@@ -343,6 +353,8 @@ fprintf('Found %d candidate catgt_* session folders.\n', ...
 
 records = struct([]);
 reference_metadata = struct([]);
+% Keep reporting metadata separate so records and the saved MAT stay intact.
+record_id_reports = struct('model_local_ids', {}, 'mapping_error', {});
 
 skipped_sessions = struct( ...
     'session_index', {}, ...
@@ -370,6 +382,7 @@ for si = 1:num_session_candidates
         si, num_session_candidates, session_name, session_label);
 
     session_records = struct([]);
+    session_id_reports = struct('model_local_ids', {}, 'mapping_error', {});
     group_record_count = zeros(1, nGroups);
     session_reasons = {};
     local_reference = reference_metadata;
@@ -410,7 +423,7 @@ for si = 1:num_session_candidates
             input_file = input_files{fi};
 
             try
-                [probe_records, probe_metadata] = ...
+                [probe_records, probe_metadata, probe_id_reports] = ...
                     readOneGPLProbeFileLocal( ...
                     input_file, ...
                     si, session_label, session_name, session_dir, ...
@@ -432,11 +445,15 @@ for si = 1:num_session_candidates
 
                 if isempty(session_records)
                     session_records = probe_records(:);
+                    session_id_reports = probe_id_reports(:);
                 else
                     first_new = numel(session_records) + 1;
                     session_records( ...
                         first_new:first_new + numel(probe_records) - 1, 1) = ...
                         probe_records(:);
+                    session_id_reports( ...
+                        first_new:first_new + numel(probe_records) - 1, 1) = ...
+                        probe_id_reports(:);
                 end
 
                 for rr = 1:numel(probe_records)
@@ -511,10 +528,13 @@ for si = 1:num_session_candidates
 
     if isempty(records)
         records = session_records(:);
+        record_id_reports = session_id_reports(:);
     else
         first_new = numel(records) + 1;
         records(first_new:first_new + numel(session_records) - 1, 1) = ...
             session_records(:);
+        record_id_reports(first_new:first_new + numel(session_records) - 1, 1) = ...
+            session_id_reports(:);
     end
 
     if isempty(reference_metadata)
@@ -562,6 +582,8 @@ for g = 1:nGroups
         sum(this_pool.is_component), ...
         sum(this_pool.is_unclassified), ...
         sum(this_pool.is_invalid));
+
+    printInvalidNeuronIdsLocal(records, record_id_reports, g);
 end
 
 group_pool = [group_pool_cell{:}];
@@ -608,7 +630,7 @@ GPLIndexSummary = struct();
 
 GPLIndexSummary.meta = struct();
 GPLIndexSummary.meta.program = 'sum_GPL_index_by_area.m';
-GPLIndexSummary.meta.revision = '2026-08-20b';
+GPLIndexSummary.meta.revision = '2026-10-16';
 GPLIndexSummary.meta.root_dir = root_dir;
 GPLIndexSummary.meta.gpl_mat_name = gpl_mat_name;
 GPLIndexSummary.meta.subtract_spontaneous = subtract_spontaneous;
@@ -764,7 +786,6 @@ for g = 1:nGroups
         group_pool(g), ...
         group_display_names{g}, ...
         group_colors(g, :), ...
-        class_names, class_display_names, class_markers, ...
         reference_metadata.pattern_z_threshold, ...
         z_limits_shared, ...
         pi_distribution.centers, ...
@@ -773,12 +794,10 @@ for g = 1:nGroups
         pi_limits_shared, pi_y_limits_shared, ...
         figure_visible, pattern_figure_size_inches, ...
         class_scatter_size, class_scatter_alpha, ...
-        class_scatter_line_width, ...
         class_boundary_line_style, class_boundary_line_width, ...
         pi_bar_width, pi_bar_alpha, ...
         show_pattern_index_neuron_count, ...
-        class_legend_location, ...
-        font_name, axis_font_size, legend_font_size, axis_line_width);
+        font_name, axis_font_size, axis_line_width);
 end
 
 if save_figure
@@ -989,7 +1008,7 @@ function input_files = findGPLFilesForProbeLocal( ...
     end
 end
 
-function [records, metadata] = readOneGPLProbeFileLocal( ...
+function [records, metadata, id_reports] = readOneGPLProbeFileLocal( ...
         input_file, ...
         session_index, session_label, session_name, session_dir, ...
         expected_group_indices, expected_group_probes, ...
@@ -1085,6 +1104,7 @@ function [records, metadata] = readOneGPLProbeFileLocal( ...
 
     records = struct([]);
     metadata = struct([]);
+    id_reports = struct('model_local_ids', {}, 'mapping_error', {});
 
     for local_idx = 1:numel(expected_group_indices)
         group_index = expected_group_indices(local_idx);
@@ -1102,6 +1122,9 @@ function [records, metadata] = readOneGPLProbeFileLocal( ...
             session_index, session_label, session_name, session_dir, ...
             group_index, expected_group_names{group_index}, ...
             expected_probe_id, expected_baseline_subtracted);
+
+        % Read-only diagnostics: this never modifies this_record/metadata.
+        id_reports(local_idx, 1) = makeInvalidIdReportLocal(G, this_record, input_file);
 
         if isempty(records)
             records = this_record;
@@ -1289,6 +1312,93 @@ function requireFieldsLocal(S, required_fields, structure_name, input_file)
         if ~isfield(S, required_fields{k})
             error('%s is missing field %s in %s.', ...
                 structure_name, required_fields{k}, input_file);
+        end
+    end
+end
+
+function report = makeInvalidIdReportLocal(G, rec, input_file)
+% Keep diagnostics separate from rec, metadata, pooled values and MAT fields.
+
+    report = struct('model_local_ids', zeros(0, 1), 'mapping_error', '');
+    if ~any(~isfinite(rec.OSI) | ~isfinite(rec.DI) | rec.is_invalid)
+        return;
+    end
+
+    try
+        requireFieldsLocal(G, {'target_unit_ids'}, 'gpl_results group', input_file);
+        target_ids = numericColumnLocal(G.target_unit_ids, ...
+            'gpl_results.target_unit_ids', input_file);
+        if isempty(target_ids) || any(~isfinite(target_ids)) || ...
+                numel(unique(target_ids)) ~= numel(target_ids)
+            error('target_unit_ids must be nonempty, finite and unique.');
+        end
+
+        % Mapping by original target identity preserves all missing positions.
+        [found, mapped_ids] = ismember(rec.unit_ids, target_ids);
+        if ~all(found) || numel(mapped_ids) ~= rec.n_neurons
+            error('Some used_unit_ids are missing from the original target-unit list.');
+        end
+
+        if isfield(G, 'target_unit_index')
+            stored_ids = numericColumnLocal(G.target_unit_index, ...
+                'gpl_results.target_unit_index', input_file);
+            if ~isequal(stored_ids, double(mapped_ids(:)))
+                error('target_unit_index disagrees with target_unit_ids/used_unit_ids.');
+            end
+            report.model_local_ids = stored_ids;
+        else
+            % Older results can still be mapped exactly by saved target IDs.
+            report.model_local_ids = double(mapped_ids(:));
+        end
+    catch ME
+        % Failure of a diagnostic must not change the original analysis pool.
+        % Never print sorting IDs or compact GPL row numbers as model IDs.
+        report.mapping_error = ME.message;
+    end
+end
+
+function printInvalidNeuronIdsLocal(records, id_reports, group_index)
+% Print only included records and nonempty invalid categories. Never pool
+% local IDs across sessions, since each session/group restarts at ID 1.
+
+    if numel(records) ~= numel(id_reports)
+        error('Internal mismatch between GPL records and local-ID reports.');
+    end
+    category_names = {'OSI', 'DSI', 'GPL classification (Zp/Zc/PI)'};
+
+    for r = 1:numel(records)
+        rec = records(r);
+        if rec.group_index ~= group_index
+            continue;
+        end
+        invalid_masks = {~isfinite(rec.OSI), ~isfinite(rec.DI), rec.is_invalid};
+        if ~any(cellfun(@any, invalid_masks))
+            continue;
+        end
+
+        fprintf('  Invalid neurons: %s (%s) | Group %d: %s | probe %d\n', ...
+            rec.session_name, rec.session_label, rec.group_index, ...
+            rec.group_name, rec.probe_id);
+        report = id_reports(r);
+        if ~isempty(report.mapping_error)
+            fprintf(2, '    Model-local ID mapping could not be verified: %s\n', ...
+                report.mapping_error);
+            fprintf(2, '    Source: %s\n', rec.input_file);
+        end
+
+        for c = 1:numel(category_names)
+            mask = invalid_masks{c};
+            if ~any(mask)
+                continue;
+            end
+            if isempty(report.mapping_error)
+                ids = report.model_local_ids(mask);
+                fprintf('    %s invalid: n=%d | model-local IDs: %s\n', ...
+                    category_names{c}, sum(mask), mat2str(ids(:)'));
+            else
+                fprintf('    %s invalid: n=%d | model-local IDs unavailable\n', ...
+                    category_names{c}, sum(mask));
+            end
         end
     end
 end
@@ -1993,17 +2103,15 @@ end
 
 function fig = plotOneGroupPatternComponentLocal( ...
         pool, group_name, this_color, ...
-        class_names, class_display_names, class_markers, ...
         z_threshold, z_limits, ...
         pi_centers, pi_probability, pi_n, ...
         pi_limits, pi_y_limits, ...
         figure_visible, figure_size_inches, ...
-        scatter_size, scatter_alpha, scatter_line_width, ...
+        scatter_size, scatter_alpha, ...
         boundary_line_style, boundary_line_width, ...
         pi_bar_width, pi_bar_alpha, ...
         show_pi_neuron_count, ...
-        legend_location, ...
-        font_name, axis_font_size, legend_font_size, axis_line_width)
+        font_name, axis_font_size, axis_line_width)
 
     fig = figure( ...
         'Name', sprintf('%s GPL pattern/component summary', group_name), ...
@@ -2021,24 +2129,11 @@ function fig = plotOneGroupPatternComponentLocal( ...
     ax_scatter = nexttile(tl, 1);
     hold(ax_scatter, 'on');
 
-    class_handles = gobjects(3, 1);
-
-    % Draw unclassified first, then component, then pattern, so the more
-    % specific classes remain visible when points overlap.
-    draw_order = [3, 2, 1];
-
-    for d = 1:numel(draw_order)
-        c = draw_order(d);
-        mask = pool.(['is_', class_names{c}]) & ...
-            isfinite(pool.Zc) & isfinite(pool.Zp);
-
-        class_handles(c) = scatterClassLocal( ...
-            ax_scatter, ...
-            pool.Zc(mask), pool.Zp(mask), ...
-            scatter_size, class_markers{c}, this_color, ...
-            scatter_alpha, scatter_line_width, ...
-            class_display_names{c});
-    end
+    % Classification still controls validity, but not marker appearance.
+    mask = (pool.is_pattern | pool.is_component | pool.is_unclassified) & ...
+        isfinite(pool.Zc) & isfinite(pool.Zp);
+    scatterAreaLocal(ax_scatter, pool.Zc(mask), pool.Zp(mask), ...
+        scatter_size, this_color, scatter_alpha);
 
     plotZClassificationBoundariesLocal( ...
         ax_scatter, z_limits, z_threshold, ...
@@ -2052,15 +2147,6 @@ function fig = plotOneGroupPatternComponentLocal( ...
         'FontName', font_name, 'Interpreter', 'tex');
     ylabel(ax_scatter, 'Pattern correlation (Z_p)', ...
         'FontName', font_name, 'Interpreter', 'tex');
-
-    legend(ax_scatter, class_handles, class_display_names, ...
-        'Location', legend_location, ...
-        'Box', 'off', ...
-        'Color', 'w', ...
-        'EdgeColor', [0.35, 0.35, 0.35], ...
-        'FontName', font_name, ...
-        'FontSize', legend_font_size, ...
-        'Interpreter', 'none');
 
     cleanAxisLocal( ...
         ax_scatter, font_name, axis_font_size, axis_line_width);
@@ -2154,24 +2240,20 @@ function plotMeanArrowLocal( ...
         'Clipping', 'on');
 end
 
-function h = scatterClassLocal( ...
-        ax, x, y, marker_size, marker_shape, color, ...
-        alpha_value, line_width, display_name)
+function h = scatterAreaLocal(ax, x, y, marker_size, color, alpha_value)
+% Use the same filled circle and area color for every valid cell.
 
     try
-        h = scatter(ax, x, y, marker_size, marker_shape, ...
+        h = scatter(ax, x, y, marker_size, 'o', ...
             'MarkerFaceColor', color, ...
-            'MarkerEdgeColor', color, ...
+            'MarkerEdgeColor', 'none', ...
             'MarkerFaceAlpha', alpha_value, ...
-            'MarkerEdgeAlpha', min(1, alpha_value + 0.20), ...
-            'LineWidth', line_width, ...
-            'DisplayName', display_name);
+            'HandleVisibility', 'off');
     catch
-        h = scatter(ax, x, y, marker_size, marker_shape, ...
+        h = scatter(ax, x, y, marker_size, 'o', ...
             'MarkerFaceColor', color, ...
-            'MarkerEdgeColor', color, ...
-            'LineWidth', line_width, ...
-            'DisplayName', display_name);
+            'MarkerEdgeColor', 'none', ...
+            'HandleVisibility', 'off');
     end
 end
 
