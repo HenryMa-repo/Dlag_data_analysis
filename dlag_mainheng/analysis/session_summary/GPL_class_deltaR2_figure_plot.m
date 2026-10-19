@@ -7,7 +7,10 @@
 % Latent-source differences Across - Within and FF - FB are plotted
 % separately for V1 and MT, with Pattern/Component/Unclassified cells shown
 % as separate x-axis categories. Feature effects Grating - Plaid,
-% Small - Large, Low - High pool the three cell classes. Each feature-effect
+% Small - Large, Low - High use the neuron_population selected below.
+% 'all_neurons': all model neurons, including GPL-invalid neurons.
+% 'pcu_neurons': Pattern/Component/Unclassified only (original analysis).
+% Each feature-effect
 % plot shows both areas side by side for each reconstruction source; the area
 % is encoded solely by blue/orange and a two-entry legend. An optional full
 % range inset uses exactly the same source -> area grouping as the main plot.
@@ -20,8 +23,14 @@
 % rank tests against zero, plus a three-class Kruskal-Wallis test and
 % Holm-corrected rank-sum comparisons for the latent-source balances.
 % One-sample violin P values are nominal; only class pairs receive Holm.
-% Z-scoring pools all five reconstruction R2 fields within EACH session-area
-% before computing differences; V1 and MT are never normalized together.
+% The SAME neuron_population option selects the z-score reference pool:
+% finite R2 values from the selected neurons, all five reconstruction fields
+% and all eight conditions within EACH session-area.
+% Feature and balance analyses share that mean and sample SD. V1 and MT
+% are never normalized together. Legends report unique used neurons per
+% area in that figure (a neuron used by both sources is counted once).
+% Balance figures always show P/C/U separately, with the selected shared
+% z-score baseline. Output bases carry allN or pcuN to keep modes separate.
 
 clc;
 clear;
@@ -36,6 +45,12 @@ model_mode = 'all_condition_model';
 reconstruction_suffix = 'all_across_within_ff_fb';
 group_names = {'V1', 'MT'}; % follows model group order in input MAT
 gpl_mat_name = 'unit_gpl_results_sponsub.mat';
+
+neuron_population = 'all_neurons'; % 'all_neurons' or 'pcu_neurons'
+% Controls BOTH stimulus-feature neurons and the shared z-score pool.
+% all_neurons: current all-model-neuron analysis, including GPL-invalid.
+% pcu_neurons: original P/C/U analysis and original P/C/U z-score baseline.
+% Both modes retain the same figures and legends with actual neuron counts.
 
 save_mat = false;
 save_fig = false;
@@ -103,6 +118,9 @@ feature_delta_definitions = buildFeatureDeltaDefinitionsLocal();
 
 %% ======================= VALIDATE SETTINGS =============================
 
+neuron_population = lower(strtrim(char(neuron_population)));
+[population_description, population_tag] = ...
+    neuronPopulationDefinitionLocal(neuron_population);
 group_names = normalizeGroupNamesLocal(group_names);
 [group_display_names, group_file_tags] = ...
     buildGroupLabelsLocal(group_names);
@@ -139,6 +157,7 @@ poster_group_colors = resolvePosterAreaColorsLocal( ...
     group_names, poster_area_colors);
 poster_config = struct( ...
     'plot_style', 'violin', 'condition_display_mode', 'pooled', ...
+    'neuron_population', neuron_population, ...
     'feature_delta_plot_mode', 'pooled', ...
     'mean_differnet_conditions', logical(mean_differnet_conditions), ...
     'outlier_mode', poster_outlier_mode, ...
@@ -167,10 +186,12 @@ output_base = sprintf('%s_%s_pooled_mean1_violin_cellstats_%s_p%g_vw%g_jw%g_vg%g
     output_prefix, mapping_file_tag, poster_outlier_mode, ...
     poster_central_percentile, poster_violin_width, ...
     poster_point_jitter_width, poster_violin_point_spread_gain);
+output_base = [output_base, '_', population_tag];
 
 fprintf('\nAcross-session delta R2 poster figures (pooled neuron means)\n');
 fprintf('Root: %s | model: %s | run: %d\n', root_dir, model_mode, runIdx);
 fprintf('Z-score: R2 first, differences second; separate for each session-area.\n');
+fprintf('Feature and z-score neuron population: %s\n', neuron_population);
 fprintf('Figures: raw and z-scored latent/feature deltas; violin only.\n');
 fprintf('Feature effects: source, then V1/MT; colors represent area.\n');
 fprintf('Output base: %s\n', output_base);
@@ -207,7 +228,7 @@ for si = 1:numel(session_dirs)
             r2_field_names, source_r2_field_names, delta_names, ...
             delta_positive_fields, delta_negative_fields, ...
             stim_types, category_labels, ...
-            feature_delta_definitions, reference);
+            feature_delta_definitions, reference, neuron_population);
 
         records{end + 1} = rec; %#ok<SAGROW>
 
@@ -269,7 +290,7 @@ MultiSessionGPLClassDeltaR2 = buildMultiSessionDeltaSummaryLocal( ...
     feature_source_labels, ...
     delta_names, delta_labels, delta_positive_fields, ...
     delta_negative_fields, stim_types, category_labels, ...
-    output_prefix, output_base, feature_delta_definitions);
+    output_prefix, output_base, feature_delta_definitions, neuron_population);
 
 MultiSessionGPLClassDeltaR2.meta.created_by = ...
     'GPL_class_deltaR2_figure_plot.m';
@@ -279,7 +300,7 @@ MultiSessionGPLClassDeltaR2.notes.condition_plotting = [ ...
     'Finite values from eight conditions are averaged per neuron; each ', ...
     'neuron supplies at most one point per contrast.'];
 MultiSessionGPLClassDeltaR2.notes.feature_delta_plotting = [ ...
-    'Pattern/component/unclassified neurons are combined. Within each ', ...
+    'Selected population: ', population_description, '. Within each ', ...
     'source and effect, four matched values are averaged per neuron. ', ...
     'Both areas appear next to one another within each source category ', ...
     'in the main axes and full-range inset; color and legend identify area. ', ...
@@ -337,7 +358,7 @@ for g = 1:numel(group_names)
     end
 end
 
-%% ====== COMBINED-AREA FEATURE EFFECTS: ALL GPL CLASSES POOLED ==========
+%% ====== COMBINED-AREA FEATURE EFFECTS: SELECTED NEURON POPULATION ======
 
 source_families = {[2, 1], [3, 4]}; % Within/Across; FF/FB
 source_file_tags = {'witAcr', 'ffFb'};
@@ -352,16 +373,18 @@ for e = 1:numel(feature_delta_definitions)
                     MultiSessionGPLClassDeltaR2.feature_delta_pooled(g).effect.(D.name);
                 Q = buildPosterFeatureDeltaDataLocal( ...
                     pooled_effect, D, class_names, source_idx, ...
-                    feature_source_labels(source_idx), value_mode);
+                    feature_source_labels(source_idx), value_mode, neuron_population);
                 if g == 1
                     P = Q;
                     P.groups = cell(numel(source_idx), numel(group_names));
                     P.neuron_counts = zeros(numel(source_idx), ...
                         numel(group_names));
+                    P.legend_neuron_counts = zeros(1, numel(group_names));
                     P.area_names = group_names;
                 end
                 P.groups(:, g) = Q.groups(:, 1);
                 P.neuron_counts(:, g) = Q.neuron_counts(:);
+                P.legend_neuron_counts(g) = Q.legend_neuron_counts;
             end
             if sf == 1
                 test_tail = 'right';
@@ -395,6 +418,19 @@ fprintf('\nDone.\n');
 %% =======================================================================
 % Local functions
 % ========================================================================
+
+function [description, tag] = neuronPopulationDefinitionLocal(mode)
+    switch mode
+        case 'all_neurons'
+            description = 'all model neurons (including GPL-invalid neurons)';
+            tag = 'allN';
+        case 'pcu_neurons'
+            description = 'P/C/U neurons (excluding GPL-invalid neurons)';
+            tag = 'pcuN';
+        otherwise
+            error('neuron_population must be ''all_neurons'' or ''pcu_neurons''.');
+    end
+end
 
 function validatePosterOptionsLocal( ...
     area_colors, group_names, outlier_mode, central_percentile, ...
@@ -503,10 +539,12 @@ function P = buildPosterLatentDeltaDataLocal( ...
         P.groups{c, 1} = posterFiniteRowMeanLocal(condition_matrix);
         P.neuron_counts(c) = sum(isfinite(P.groups{c, 1}));
     end
+    % P/C/U are mutually exclusive; each finite class value is one neuron.
+    P.legend_neuron_counts = sum(P.neuron_counts);
 end
 
 function P = buildPosterFeatureDeltaDataLocal( ...
-    pooled_effect, D, class_names, source_idx, source_labels, value_mode)
+    pooled_effect, D, class_names, source_idx, source_labels, value_mode, neuron_population)
 
     if strcmp(value_mode, 'raw')
         matrix_field = 'raw_delta_array';
@@ -528,26 +566,48 @@ function P = buildPosterFeatureDeltaDataLocal( ...
     P.neuron_counts = zeros(numel(source_idx), 1);
     P.groups = cell(numel(source_idx), 1);
 
-    for i = 1:numel(source_idx)
-        source_matrix = zeros(0, numel(D.fixed_labels));
+    if strcmp(neuron_population, 'all_neurons')
+        if ~isfield(pooled_effect, 'all_neurons')
+            error('Missing all-model-neuron feature data for %s.', D.name);
+        end
+        C = pooled_effect.all_neurons;
+        A = C.(matrix_field);
+    else
+        % Preserve the original class -> session -> unit row order so the
+        % PCU mode reproduces the original numerical and plotted values.
+        A = [];
         for c = 1:numel(class_names)
             if ~isfield(pooled_effect.class, class_names{c})
                 error('Missing pooled feature class %s.', class_names{c});
             end
             C = pooled_effect.class.(class_names{c});
-            A = C.(matrix_field);
-            if ~isnumeric(A) || size(A, 2) < source_idx(i) || ...
-                    size(A, 3) ~= numel(D.fixed_labels)
-                error('Invalid %s for class %s.', ...
-                    matrix_field, class_names{c});
+            this_array = C.(matrix_field);
+            if ~isnumeric(this_array) || size(this_array, 2) < max(source_idx) || ...
+                    size(this_array, 3) ~= numel(D.fixed_labels)
+                error('Invalid %s for class %s.', matrix_field, class_names{c});
             end
-            matches = reshape(double(A(:, source_idx(i), :)), ...
-                size(A, 1), numel(D.fixed_labels));
-            source_matrix = [source_matrix; matches]; %#ok<AGROW>
+            if c == 1
+                A = this_array;
+            else
+                A = cat(1, A, this_array);
+            end
         end
+    end
+    if ~isnumeric(A) || size(A, 2) < max(source_idx) || ...
+            size(A, 3) ~= numel(D.fixed_labels)
+        error('Invalid %s for %s (%s).', matrix_field, D.name, neuron_population);
+    end
+    used_neurons = false(size(A, 1), 1);
+    for i = 1:numel(source_idx)
+        source_matrix = reshape(double(A(:, source_idx(i), :)), ...
+            size(A, 1), numel(D.fixed_labels));
         P.groups{i, 1} = posterFiniteRowMeanLocal(source_matrix);
         P.neuron_counts(i) = sum(isfinite(P.groups{i, 1}));
+        used_neurons = used_neurons | isfinite(P.groups{i, 1});
     end
+    % Rows retain session + unit identity and are shared by both sources.
+    % Count the union of finite plotted values, not the sum of source counts.
+    P.legend_neuron_counts = sum(used_neurons);
 end
 
 function P = posterComputeTestsLocal(P, tail, compare_classes, alpha)
@@ -852,12 +912,15 @@ function fig = plotPosterDeltaLocal(P, config, area_color, area_name)
         'FontSize', config.axis_font_size + 2, ...
         'Color', [0.3, 0.3, 0.3]);
     legend_markers = gobjects(1, numel(legend_names));
+    legend_labels = cell(size(legend_names));
     for j = 1:numel(legend_names)
         legend_markers(j) = plot(ax, nan, nan, 'o', ...
             'LineStyle', 'none', 'MarkerFaceColor', colors(j,:), ...
             'MarkerEdgeColor', colors(j,:), 'MarkerSize', 7);
+        legend_labels{j} = sprintf('%s: n=%d', ...
+            legend_names{j}, P.legend_neuron_counts(j));
     end
-    lgd = legend(ax, legend_markers, legend_names, 'Box', 'off', ...
+    lgd = legend(ax, legend_markers, legend_labels, 'Box', 'off', ...
         'Interpreter', 'none', 'Location', 'none', ...
         'Orientation', 'horizontal', 'FontName', config.font_name, ...
         'FontSize', config.axis_font_size);
@@ -867,6 +930,7 @@ function fig = plotPosterDeltaLocal(P, config, area_color, area_name)
         fig, P, config, x, xlimits, main_pos, combined_areas);
     fig.UserData = struct('area', {legend_names}, ...
         'effect', P.effect_label, 'neuron_counts', P.neuron_counts, ...
+        'legend_neuron_counts', P.legend_neuron_counts, ...
         'is_neuron_average', true, ...
         'main_abs_limit', ylimit, 'full_abs_limit', full_limit, ...
         'points_outside_main_axis', clipped_count, ...
@@ -1553,7 +1617,7 @@ function [rec, reference] = readOneSessionLocal( ...
     group_file_tags, gpl_mat_name, r2_field_names, ...
     source_field_names, delta_names, ...
     delta_positive_fields, delta_negative_fields, ...
-    stim_types, category_labels, feature_delta_definitions, reference)
+    stim_types, category_labels, feature_delta_definitions, reference, neuron_population)
 
     [parent_dir, catgt_name] = fileparts(session_dir);
     [~, session_parent_name] = fileparts(parent_dir);
@@ -1705,22 +1769,23 @@ function [rec, reference] = readOneSessionLocal( ...
             end
         end
 
-        plotted_mask = ...
-            class_info.pattern | ...
-            class_info.component | ...
-            class_info.unclassified;
-
-        if ~any(plotted_mask)
-            error('%s contains no pattern/component/unclassified neurons.', ...
-                group_display_names{g});
+        % The selected population supplies ONE common reference mean/SD
+        % for every feature and balance within this session and area.
+        normalization_mask = true(numel(model_ids), 1);
+        if strcmp(neuron_population, 'pcu_neurons')
+            normalization_mask = class_info.pattern | ...
+                class_info.component | class_info.unclassified;
+            if ~any(normalization_mask)
+                error('%s contains no pattern/component/unclassified neurons.', ...
+                    group_display_names{g});
+            end
         end
-
         r2_zscore_pool = [];
 
         for st = 1:numel(stim_types)
             stim_name = stim_types{st};
             this_r2 = groups(g).stim.(stim_name).raw_r2_matrix;
-            this_r2 = this_r2(plotted_mask, :);
+            this_r2 = this_r2(normalization_mask, :);
             r2_zscore_pool = [ ...
                 r2_zscore_pool; this_r2(:)]; %#ok<AGROW>
         end
@@ -1772,6 +1837,7 @@ function [rec, reference] = readOneSessionLocal( ...
         end
 
         normalization = struct();
+        normalization.neuron_population = neuron_population;
         normalization.pool_mean = pool_mean;
         normalization.pool_sd = pool_sd;
         normalization.std_normalization = 0;
@@ -1779,8 +1845,9 @@ function [rec, reference] = readOneSessionLocal( ...
         normalization.n_possible = num_possible;
         normalization.n_nonfinite = ...
             num_possible - numel(r2_zscore_pool);
+        population_description = neuronPopulationDefinitionLocal(neuron_population);
         normalization.pooling_scope = [ ...
-            'all finite P/C/U neuron raw R2 values pooled across ', ...
+            'all finite raw R2 values from ', population_description, ' pooled across ', ...
             num2str(numel(r2_field_names)), ...
             ' reconstruction fields (all, across, within, FF, FB) ', ...
             'and all ', num2str(numel(stim_types)), ...
@@ -2325,10 +2392,11 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
     feature_source_labels, ...
     delta_names, delta_labels, delta_positive_fields, ...
     delta_negative_fields, stim_types, category_labels, ...
-    output_prefix, output_base, feature_delta_definitions)
+    output_prefix, output_base, feature_delta_definitions, neuron_population)
 
     num_sessions = numel(records);
     num_groups = numel(group_names);
+    population_description = neuronPopulationDefinitionLocal(neuron_population);
 
     session_info = struct( ...
         'session_index', {}, ...
@@ -2644,6 +2712,11 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
                 E.class.(class_name) = C;
             end
 
+            % Preserve the existing P/C/U fields for downstream readers.
+            % all_neurons mode uses this additional, unscreened neuron pool;
+            % pcu_neurons mode uses the original class fields above.
+            E.all_neurons = poolAllModelFeatureDeltasLocal( ...
+                records, g, D, numel(source_field_names));
             feature_delta_pooled(g).effect.(D.name) = E;
         end
     end
@@ -2654,6 +2727,7 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
     M.meta.root_dir = root_dir;
     M.meta.data_content = data_content;
     M.meta.model_mode = model_mode;
+    M.meta.neuron_population = neuron_population;
     M.meta.r2_split_mode = r2_split_mode;
     M.meta.split_file_tag = split_file_tag;
     M.meta.condition_display_mode = 'pooled';
@@ -2676,6 +2750,7 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
         numel(feature_delta_definitions);
 
     M.settings.plot_value_modes = {'raw', 'zscore'};
+    M.settings.neuron_population = neuron_population;
     M.settings.zscore_std_normalization = 0;
     M.settings.mean_differnet_conditions = 1;
     M.settings.plot_style = 'violin';
@@ -2744,7 +2819,7 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
     M.notes.zscore_definition = [ ...
         'For every session and area/model group separately, one mean and ', ...
         'one sample SD are calculated from all finite raw R2 values after ', ...
-        'pooling pattern/component/unclassified neurons, all five ', ...
+        'pooling ', population_description, ', all five ', ...
         'reconstruction fields (all, across, within, FF, FB), and all ', ...
         num2str(numel(stim_types)), ...
         ' stimulus groups selected by r2_split_mode. The same mean and ', ...
@@ -2754,9 +2829,17 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
         'Because both terms in every difference use the same session-area ', ...
         'R2 mean and SD, their shared mean cancels. A zero difference of ', ...
         'z-scored R2 means the two original R2 values are equal.'];
-    M.notes.invalid_neurons = [ ...
-        'Invalid neurons remain in alignment checks and session_data, ', ...
-        'but are excluded from the z-score pool and summary figures.'];
+    if strcmp(neuron_population, 'all_neurons')
+        M.notes.invalid_neurons = [ ...
+            'Invalid neurons remain in alignment checks and session_data, ', ...
+            'and their finite R2 values contribute to the common z-score pool. ', ...
+            'They are included in stimulus-feature figures but not in the ', ...
+            'P/C/U class-specific latent-balance figures.'];
+    else
+        M.notes.invalid_neurons = [ ...
+            'Invalid neurons remain in alignment checks and session_data, ', ...
+            'but are excluded from the z-score pool and summary figures.'];
+    end
     M.notes.classification_source = [ ...
         'Spontaneous-subtracted GPL plaid classification selected from ', ...
         'nested GPL group entries by model_group_index.'];
@@ -2777,7 +2860,39 @@ function M = buildMultiSessionDeltaSummaryLocal( ...
         'differences; standardize R2 before each matched subtraction.'];
     M.notes.feature_delta_plotting = [ ...
         'One finite-mean point per neuron over four matched differences. ', ...
-        'P/C/U classes are combined, and areas are paired for each source.'];
+        'Selected population: ', population_description, ...
+        '; areas are paired for each source.'];
+end
+
+function C = poolAllModelFeatureDeltasLocal(records, group_idx, D, num_sources)
+% Keep each model neuron once per session, independently of GPL validity.
+% The existing E.class fields retain their original P/C/U-only structure.
+    num_matches = numel(D.fixed_labels);
+    C = struct();
+    C.raw_delta_array = zeros(0, num_sources, num_matches);
+    C.z_delta_array = zeros(0, num_sources, num_matches);
+    C.unit_ids = [];
+    C.session_index = [];
+    C.session_label = {};
+    C.session_name = {};
+    for s = 1:numel(records)
+        G = records{s}.group(group_idx);
+        E = G.feature_delta.(D.name);
+        n_this = numel(G.unit_ids);
+        C.raw_delta_array = cat(1, C.raw_delta_array, E.raw_delta_array);
+        C.z_delta_array = cat(1, C.z_delta_array, E.z_delta_array);
+        C.unit_ids = [C.unit_ids; G.unit_ids(:)]; %#ok<AGROW>
+        C.session_index = [C.session_index; repmat(s, n_this, 1)]; %#ok<AGROW>
+        C.session_label = [C.session_label; ...
+            repmat({records{s}.session_label}, n_this, 1)]; %#ok<AGROW>
+        C.session_name = [C.session_name; ...
+            repmat({records{s}.session_name}, n_this, 1)]; %#ok<AGROW>
+    end
+    C.n_neurons = size(C.raw_delta_array, 1);
+    C.finite_count_raw_by_source_match = reshape( ...
+        sum(isfinite(C.raw_delta_array), 1), num_sources, num_matches);
+    C.finite_count_z_by_source_match = reshape( ...
+        sum(isfinite(C.z_delta_array), 1), num_sources, num_matches);
 end
 
 function [f, xi] = estimateDensityLocal(vals)
