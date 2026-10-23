@@ -1,7 +1,14 @@
 %% GPL_class_deltaVar_figure_plot.m
 % Standalone plotting/statistics script; no workspace variables are needed.
 %
-% INPUTS: saved across-session summaries, NOT models or reconstructions.
+% INPUTS: saved across-session summaries establish the original session roster.
+% NEW 2026-10-23: All/mean_count posterior analyses also read each session's
+% PosteriorRawVarExtra, appended by the updated posterior_rawvar.m. No
+% reconstruction is performed here. Normalize EACH neuron/condition before
+% averaging neurons; zero/invalid mean count stays NaN and is excluded from
+% that condition's neuron mean. Require all feature matches as before.
+% All gets one separate three-row figure; no Z is computed in this script.
+% Existing summary programs do not need to be rerun to include these extras.
 %   1. sum_sessions_latent_compare_var.m -> MultiSessionSummary
 %      Run with metric_name='rawvariance', condition_display_mode='pooled',
 %      save_mat=true. Its pooled population includes ALL MODEL NEURONS,
@@ -68,6 +75,16 @@ gpl_mat_name = 'unit_gpl_results_sponsub.mat'; % class-definition provenance
 model_mode = 'each_condition';         % 'each_condition' or 'all_condition'
 variance_source = 'model';        % 'model' or 'posterior'
 uncertainty_included = 0;             % posterior only: select saved u0/u1
+variance_unit = 'count'; % 'count' or 'rate'; metadata bin_size is in SECONDS
+% The existing normalization selector 'mean_count' means mean RESPONSE:
+% count -> Var(count)/mean(count); rate -> Var(rate)/mean(rate).
+% The rate scales are 1/dt^2 (unnormalized) and 1/dt (normalized).
+variance_normalization = 'none'; % 'none' or 'mean_count' (variance / mean spikes per bin)
+% 'mean_count' is POSTERIOR ONLY. For model variance keep 'none'; model
+% normalization is not implemented yet. Select saved u0/u1 as above.
+analyze_all_latent_feature_effects = true; % separate 3-row All figure; no All Z
+% All/mean_count posterior inputs require the updated posterior_rawvar.m.
+% Set this false and normalization='none' to use legacy session MAT files.
 DSL_filter = 'all_latents';           % MODEL only: also 'DSL_filtered'
 DSL_threshold = [];                  % []=use saved value; or select a value
 
@@ -127,17 +144,19 @@ cfg = struct('root_dir',root_dir,'data_content',data_content,'runIdx',runIdx, ..
     'bar_width',bar_width,'bar_alpha',bar_alpha,'center_line_width',center_line_width, ...
     'center_line_halfwidth',center_line_halfwidth,'font_name',font_name, ...
     'axis_font_size',axis_font_size,'figure_width',figure_width,'figure_height',figure_height);
+cfg = dvExtraConfigLocal(cfg,variance_normalization,analyze_all_latent_feature_effects);
+cfg = dvUnitConfigLocal(cfg,variance_unit);
 cfg = normalizeConfigLocal(cfg);
 
 %% ============================ READ SUMMARIES ==========================
 feature_input = []; class_input = [];
-if cfg.analyze_balances || (cfg.analyze_feature_effects && ...
+if cfg.analyze_balances || ((cfg.analyze_feature_effects || cfg.analyze_all_latent_feature_effects) && ...
         strcmp(cfg.feature_population_mode,'separate'))
     [M,filename] = loadSummaryLocal(cfg,'classes');
     class_input = unpackClassesLocal(M,filename,cfg);
     clear M;
 end
-if cfg.analyze_feature_effects
+if cfg.analyze_feature_effects || cfg.analyze_all_latent_feature_effects
     if strcmp(cfg.feature_population_mode,'pooled')
         [M,filename] = loadSummaryLocal(cfg,'pooled');
         feature_input = unpackPooledLocal(M,filename,cfg);
@@ -147,6 +166,12 @@ if cfg.analyze_feature_effects
     end
 end
 cfg = resolveSavedFilterLocal(cfg,feature_input,class_input);
+class_input = dvUpgradeSessionInputLocal(class_input,cfg);
+if strcmp(cfg.feature_population_mode,'separate')
+    feature_input=class_input;
+else
+    feature_input = dvUpgradeSessionInputLocal(feature_input,cfg);
+end
 reportObservationsLocal(feature_input,class_input);
 
 %% ======================= CALCULATE AND TEST ===========================
@@ -157,6 +182,9 @@ MultiSessionGPLClassDeltaVar.meta = struct( ...
     'created_by','GPL_class_deltaVar_figure_plot.m','created_on',datestr(now,30), ...
     'model_mode',cfg.model_mode,'variance_source',cfg.variance_source, ...
     'uncertainty_included',cfg.uncertainty_included_effective, ...
+    'variance_normalization',cfg.variance_normalization, ...
+    'variance_unit',cfg.variance_unit,'normalization_denominator',cfg.normalization_denominator, ...
+    'analyze_all_latent_feature_effects',cfg.analyze_all_latent_feature_effects, ...
     'test_unit','session_direction','value_mode','raw', ...
     'population_definition','Pooled features include all model neurons; balances use P/C/U', ...
     'averaging_rule','All four matched feature differences / all eight balance conditions required', ...
@@ -166,6 +194,8 @@ MultiSessionGPLClassDeltaVar.meta = struct( ...
 MultiSessionGPLClassDeltaVar.feature = [];
 MultiSessionGPLClassDeltaVar.balance = [];
 MultiSessionGPLClassDeltaVar.panels = {};
+MultiSessionGPLClassDeltaVar.all_latent_feature = [];
+MultiSessionGPLClassDeltaVar.all_latent_panels = {};
 if cfg.analyze_feature_effects
     F = calculateFeaturesLocal(feature_input,definitions,cfg);
     MultiSessionGPLClassDeltaVar.feature = F;
@@ -195,14 +225,34 @@ if cfg.analyze_balances
         end
     end
 end
+if cfg.analyze_all_latent_feature_effects
+    FAll=dvAllSessionFeaturesLocal(feature_input,definitions,cfg);
+    MultiSessionGPLClassDeltaVar.all_latent_feature=FAll;
+    acfg=cfg; acfg.latent_labels={'All'};
+    for c=1:numel(FAll.population_labels)
+        rowPanels=cell(1,3);
+        for e=1:3
+            P=featurePanelLocal(FAll,c,e,1,acfg);
+            P.family='stimulus_feature_all_latent';
+            P.figure_tag=sprintf('fdAll_3features_%s',FAll.population_tags{c});
+            rowPanels{e}=computeTestsLocal(P,false,cfg);
+        end
+        MultiSessionGPLClassDeltaVar.all_latent_panels{c}=rowPanels;
+    end
+end
 cfg.output_base = sprintf('GPLdVar_%s_r%03d_%s_%s_%s_%s_%s_%s_b%d_f%dq%d', ...
     safeTagLocal(cfg.data_content),cfg.runIdx,cfg.mapping_tag,cfg.mode_tag, ...
     cfg.source_tag,cfg.filter_tag,cfg.feature_population_mode,cfg.summary_stat, ...
     cfg.show_bar,cfg.analyze_feature_effects,cfg.analyze_balances);
+cfg.output_base=sprintf('%s_%s_%s_a%d',cfg.output_base,cfg.normalization_tag,cfg.unit_tag, ...
+    cfg.analyze_all_latent_feature_effects);
 MultiSessionGPLClassDeltaVar.settings = cfg;
 MultiSessionGPLClassDeltaVar.meta.output_base = cfg.output_base;
-MultiSessionGPLClassDeltaVar.statistics_table = statisticsTableLocal( ...
-    MultiSessionGPLClassDeltaVar.panels,cfg);
+statPanels=MultiSessionGPLClassDeltaVar.panels;
+for c=1:numel(MultiSessionGPLClassDeltaVar.all_latent_panels)
+    statPanels=[statPanels MultiSessionGPLClassDeltaVar.all_latent_panels{c}]; %#ok<AGROW>
+end
+MultiSessionGPLClassDeltaVar.statistics_table = statisticsTableLocal(statPanels,cfg);
 disp(MultiSessionGPLClassDeltaVar.statistics_table);
 
 %% =============================== SAVE/PLOT ============================
@@ -227,9 +277,14 @@ if cfg.make_plots
         fig = plotPanelLocal(P,cfg);
         saveFigureLocal(fig,cfg,[cfg.output_base '_' P.figure_tag]);
     end
+    for c=1:numel(MultiSessionGPLClassDeltaVar.all_latent_panels)
+        rowPanels=MultiSessionGPLClassDeltaVar.all_latent_panels{c};
+        fig=dvPlotAllSessionLocal(rowPanels,cfg);
+        saveFigureLocal(fig,cfg,[cfg.output_base '_' rowPanels{1}.figure_tag]);
+    end
 end
 fprintf('Done: %d panels; each point is one session x direction.\n', ...
-    numel(MultiSessionGPLClassDeltaVar.panels));
+    numel(statPanels));
 
 %% =========================== LOCAL FUNCTIONS ==========================
 function cfg = normalizeConfigLocal(cfg)
@@ -267,8 +322,8 @@ function cfg = normalizeConfigLocal(cfg)
         end
         cfg.(f) = logical(v);
     end
-    if ~cfg.analyze_feature_effects && ~cfg.analyze_balances
-        error('Enable analyze_feature_effects and/or analyze_balances.');
+    if ~cfg.analyze_feature_effects && ~cfg.analyze_balances && ~cfg.analyze_all_latent_feature_effects
+        error('Enable feature effects, All latent feature effects and/or balances.');
     end
     cfg.uncertainty_included_effective = false;
     cfg.source_tag = 'model';
@@ -493,6 +548,11 @@ function D = inputBaseLocal(M,filename,n,co,cfg)
         'latent_labels',{cfg.latent_labels},'group_names',{cfg.group_names}, ...
         'num_sessions',numel(unique({info.session_name})),'DSL_threshold',NaN);
     if strcmp(cfg.DSL_filter,'DSL_filtered'), D.DSL_threshold = savedThresholdLocal(M); end
+    if strcmp(cfg.variance_unit,'rate') || (strcmp(cfg.variance_source,'posterior') && ...
+            (strcmp(cfg.variance_normalization,'mean_count') || cfg.analyze_all_latent_feature_effects))
+        requireFieldsLocal(M,{'session_data'},'summary for posterior Extra');
+        D.session_records=M.session_data;
+    end
 end
 
 function cfg = resolveSavedFilterLocal(cfg,F,B)
@@ -749,9 +809,14 @@ function fig = plotPanelLocal(P,cfg)
     allValues = vertcat(P.groups{:}); allValues = allValues(isfinite(allValues));
     limit = 1;
     if ~isempty(allValues) && any(allValues ~= 0), limit = 1.10*max(abs(allValues)); end
+    panelMode=isfield(cfg,'panel_figure');
+    if panelMode
+        fig=cfg.panel_figure; before=findall(fig);
+    else
     fig = figure('Name',[P.effect_label ' | ' P.population], ...
         'NumberTitle','off','Color','w','Visible',cfg.figure_visible, ...
         'Position',[100 100 cfg.figure_width cfg.figure_height],'Renderer','painters');
+    end
     mainPos = [0.11 0.23 0.83 0.58];
     if isBalance, mainPos = [0.11 0.28 0.83 0.43]; end
     ax = axes('Parent',fig,'Position',mainPos); hold(ax,'on');
@@ -792,7 +857,8 @@ function fig = plotPanelLocal(P,cfg)
         'FontName',cfg.font_name,'FontSize',cfg.axis_font_size,'TickDir','out', ...
         'XColor',[0.3 0.3 0.3],'YColor',[0.25 0.25 0.25],'LineWidth',1);
     box(ax,'off');
-    ylabel(ax,P.ylabel,'Interpreter','tex','FontName',cfg.font_name,'FontSize',cfg.axis_font_size+1);
+    yLabel=dvUnitAxisLabelLocal(P.ylabel,cfg);
+    ylabel(ax,yLabel,'Interpreter','tex','FontName',cfg.font_name,'FontSize',cfg.axis_font_size+1);
     textBoxLocal(fig,[0.10 0.945 0.69 0.04],P.effect_label,cfg,cfg.axis_font_size+2,'left','none');
     if ~isBalance
         textBoxLocal(fig,[0.10 0.905 0.78 0.035],P.population,cfg,cfg.axis_font_size,'left','none');
@@ -816,6 +882,7 @@ function fig = plotPanelLocal(P,cfg)
         [cfg.data_content ' | ' cfg.DSL_filter ' | two-sided tests'],cfg,9,'left','none');
     fig.UserData = struct('panel',P,'x_positions',x,'center_values',centerValues, ...
         'summary_stat',cfg.summary_stat,'show_bar',cfg.show_bar,'settings',cfg);
+    if panelMode, dvFitPanelLocal(fig,before,cfg.panel_rect); end
 end
 
 function annotateStatisticsLocal(fig,P,cfg,x,xl,pos,isBalance)
@@ -1005,4 +1072,707 @@ function ensureDirLocal(folder)
     if ~isfolder(folder)
         [ok,msg] = mkdir(folder); if ~ok, error('Cannot create output folder: %s',msg); end
     end
+end
+
+function D = dvUpgradeSessionInputLocal(D,cfg)
+% The saved summary fixes the session roster/class membership. New values
+% come from each neuron's saved Extra, before the population mean is taken.
+    if isempty(D), return; end
+    D.variance_normalization=cfg.variance_normalization;
+    D.variance_unit=cfg.variance_unit;
+    D.normalization_denominator=cfg.normalization_denominator;
+    D.all_variance_mean=[];
+    if strcmp(cfg.variance_source,'model')
+        if cfg.analyze_all_latent_feature_effects
+            % Model prior latent dimensions are independent; apply the same DSL selection.
+            D.all_variance_mean=D.raw_variance_mean(:,:,:,:,1)+D.raw_variance_mean(:,:,:,:,2);
+        end
+        if strcmp(cfg.variance_unit,'rate'), D=dvScaleModelSessionUnitsLocal(D,cfg); end
+        return;
+    end
+    if strcmp(cfg.variance_normalization,'none') && ~cfg.analyze_all_latent_feature_effects && ...
+            strcmp(cfg.variance_unit,'count')
+        return;
+    end
+    n=numel(D.observation_info); ng=numel(cfg.group_names); nc=numel(D.population_labels);
+    D.original_n_neurons=D.n_neurons;
+    D.bin_size_seconds=nan(n,1); D.unit_scale=ones(n,1);
+    D.all_variance_mean=nan(n,ng,nc,8);
+    D.all_n_neurons=nan(n,ng,nc,8);
+    D.posterior_source_files=cell(n,1);
+    D.normalization_excluded=cell(n,ng);
+    pcfg=cfg; pcfg.model_dir=[cfg.model_mode '_mode'];
+    pcfg.latent_labels={'Across','Within','Feedforward','Feedback','Ambiguous'};
+    classNames={'pattern','component','unclassified'};
+    sessions=unique([D.observation_info.session_index],'stable');
+    for s=sessions(:)'
+        obs=find([D.observation_info.session_index]==s);
+        rec=recordAtLocal(D.session_records,s);
+        sessionDir=char(rec.session_dir);
+        if ~isfolder(sessionDir)
+            parts=regexp(char(rec.session_name),'[\\/]','split');
+            sessionDir=fullfile(cfg.root_dir,parts{:});
+        end
+        R=loadPosteriorNeuronVarianceLocal(sessionDir,pcfg);
+        for o=obs(:)'
+            d=D.observation_info(o).direction_index;
+            if ~isequal(double(D.condition_ids(o,:)),double(R.condition_ids(:,d)')) || ...
+                    D.observation_info(o).direction_value~=R.direction_values(d)
+                error('Saved summary and per-session posterior condition/direction mapping disagree.');
+            end
+            D.posterior_source_files{o}=R.source_file;
+            if strcmp(cfg.variance_unit,'rate')
+                D.bin_size_seconds(o)=R.bin_size_seconds; D.unit_scale(o)=R.unit_scale;
+            end
+            for g=1:ng
+                ids=R.unit_ids_by_group{g}; N=numel(ids);
+                old=reshape(R.original_direction_variance{g}(:,:,d,1:4),N,8,4);
+                chosen=reshape(R.direction_variance{g}(:,:,d,1:4),N,8,4);
+                if cfg.analyze_all_latent_feature_effects
+                    allV=reshape(R.direction_all_variance{g}(:,:,d),N,8);
+                end
+                if strcmp(cfg.variance_normalization,'mean_count')
+                    counts=reshape(R.mean_count_by_direction{g}(:,:,d),N,8);
+                    D.normalization_excluded{o,g}=struct('unit_ids',ids, ...
+                        'mean_count',counts,'invalid',~isfinite(counts)|counts<=0);
+                end
+                for c=1:nc
+                    rows=true(N,1);
+                    if nc==3
+                        info=rec.group(g).class_info;
+                        if ~isequal(double(info.unit_ids(:)),ids)
+                            error('Saved class membership and posterior neuron IDs/order differ.');
+                        end
+                        rows=logical(info.(classNames{c})(:));
+                        if numel(rows)~=N, error('Invalid saved class membership length.'); end
+                    elseif isfield(rec.group(g),'unit_ids') && ...
+                            ~isequal(double(rec.group(g).unit_ids(:)),ids)
+                        error('Saved pooled population and posterior neuron IDs/order differ.');
+                    end
+                    legacyMean=reshape(dvFiniteMeanLocal(old(rows,:,:),1),8,4);
+                    saved=reshape(D.raw_variance_mean(o,g,c,:,:),8,4);
+                    nvNearWithNaNLocal(saved,legacyMean,'saved summary versus original posterior means');
+                    if strcmp(cfg.variance_normalization,'mean_count') || strcmp(cfg.variance_unit,'rate')
+                        v=reshape(dvFiniteMeanLocal(chosen(rows,:,:),1),8,4);
+                        D.raw_variance_mean(o,g,c,:,:)=reshape(v,1,1,1,8,4);
+                        nn=sum(isfinite(chosen(rows,:,1)),1);
+                        D.n_neurons(o,g,c,:)=reshape(nn,1,1,1,8);
+                    end
+                    if cfg.analyze_all_latent_feature_effects
+                        D.all_variance_mean(o,g,c,:)=reshape(dvFiniteMeanLocal(allV(rows,:),1),1,1,1,8);
+                        D.all_n_neurons(o,g,c,:)=reshape(sum(isfinite(allV(rows,:)),1),1,1,1,8);
+                    end
+                end
+            end
+        end
+    end
+    if isfield(D,'saved_balances') && ...
+            (strcmp(cfg.variance_normalization,'mean_count') || strcmp(cfg.variance_unit,'rate'))
+        V=D.raw_variance_mean;
+        D.saved_balances=reshape(mean(V(:,:,:,:,[1 3])-V(:,:,:,:,[2 4]),4),n,ng,3,2);
+    end
+    D=rmfield(D,'session_records');
+end
+
+function y = dvFiniteMeanLocal(X,dim)
+    keep=isfinite(X); count=sum(keep,dim); X(~keep)=0;
+    y=sum(X,dim)./count; y(count==0)=NaN;
+end
+
+function F = dvAllSessionFeaturesLocal(D,definitions,cfg)
+    F=D; V=D.all_variance_mean;
+    n=size(V,1); ng=size(V,2); nc=size(V,3);
+    F.latent_labels={'All'};
+    F.values=nan(n,ng,nc,1,3);
+    F.matched_differences=nan(n,ng,nc,1,4,3);
+    F.definitions=definitions;
+    for e=1:3
+        X=V(:,:,:,definitions(e).positive)-V(:,:,:,definitions(e).negative);
+        F.values(:,:,:,:,e)=reshape(mean(X,4),n,ng,nc,1);
+        F.matched_differences(:,:,:,:,:,e)=reshape(X,n,ng,nc,1,4);
+    end
+    F.dimension_names={'session_direction','model_group','neuron_population','All','feature_effect'};
+    F.n_points=reshape(sum(isfinite(F.values),1),ng,nc,1,3);
+    F.population_mode=cfg.feature_population_mode;
+    F.zscore_computed=false;
+end
+
+function fig = dvPlotAllSessionLocal(panels,cfg)
+    fig=figure('Name','All latent | three stimulus features','NumberTitle','off', ...
+        'Color','w','Visible',cfg.figure_visible,'Renderer','painters', ...
+        'Position',[80 40 cfg.figure_width max(1100,round(1.8*cfg.figure_height))]);
+    pcfg=cfg; pcfg.panel_figure=fig;
+    for e=1:3
+        pcfg.panel_rect=[0 (3-e)/3 1 1/3];
+        plotPanelLocal(panels{e},pcfg);
+    end
+    fig.UserData=struct('panels',{panels},'settings',cfg,'zscore_computed',false);
+end
+
+function cfg = dvExtraConfigLocal(cfg,normalization,allEnabled)
+    cfg.variance_source = lower(strtrim(char(cfg.variance_source)));
+    cfg.variance_normalization = lower(strtrim(char(normalization)));
+    if ~ismember(cfg.variance_normalization,{'none','mean_count'})
+        error('variance_normalization must be ''none'' or ''mean_count''.');
+    end
+    if ~(isnumeric(allEnabled) || islogical(allEnabled)) || ...
+            ~isscalar(allEnabled) || ~ismember(double(allEnabled),[0 1])
+        error('analyze_all_latent_feature_effects must be a scalar 0 or 1.');
+    end
+    cfg.analyze_all_latent_feature_effects = logical(allEnabled);
+    if strcmp(cfg.variance_normalization,'mean_count') && ...
+            ~strcmp(cfg.variance_source,'posterior')
+        error(['variance_normalization=''mean_count'' currently supports posterior only. ', ...
+            'For model variance select ''none''; model normalization is not implemented.']);
+    end
+    cfg.normalization_tag = 'raw';
+    if strcmp(cfg.variance_normalization,'mean_count'), cfg.normalization_tag='mc'; end
+end
+
+function E = nvReadExtraLocal(filename,P,cfg)
+% Keep the legacy five-column variable authoritative. Only new options need Extra.
+    E = [];
+    if strcmp(cfg.variance_normalization,'none') && ~cfg.analyze_all_latent_feature_effects && ...
+            strcmp(cfg.variance_unit,'count')
+        return;
+    end
+    names = who('-file',filename);
+    if ~ismember('PosteriorRawVarExtra',names)
+        error(['Missing PosteriorRawVarExtra in %s. Run the updated posterior_rawvar.m ', ...
+            'for this session/mode/u%d to append All and mean-count normalized results. ', ...
+            'Alternatively use variance_normalization=''none'' and ', ...
+            'analyze_all_latent_feature_effects=false for legacy inputs.'], ...
+            filename,cfg.uncertainty_included);
+    end
+    S = load(filename,'PosteriorRawVarExtra'); E = S.PosteriorRawVarExtra;
+    nvRequireLocal(E,{'format_version','meta','labels','condition_ids','condition'},'PosteriorRawVarExtra');
+    if ~strcmp(char(E.format_version),'posterior_rawvar_extra_v1')
+        error('Unsupported PosteriorRawVarExtra format in %s.',filename);
+    end
+    nvRequireLocal(E.meta,{'data_content','runIdx','model_mode','uncertainty_included', ...
+        'variance_source','DSL_filter','variance_method','variance_normalization', ...
+        'conditionShortLabels','dirValues'},'PosteriorRawVarExtra.meta');
+    if ~strcmp(char(E.meta.data_content),cfg.data_content) || E.meta.runIdx~=cfg.runIdx || ...
+            ~strcmp(char(E.meta.model_mode),cfg.model_mode) || ...
+            ~isequal(double(E.meta.uncertainty_included),double(cfg.uncertainty_included)) || ...
+            ~strcmp(char(E.meta.variance_source),'posterior') || ...
+            ~strcmp(char(E.meta.DSL_filter),'all_latents') || ...
+            ~strcmp(char(E.meta.variance_method),'across_trials_per_bin_mean_over_bins') || ...
+            ~strcmp(char(E.meta.variance_normalization),'M-1')
+        error('PosteriorRawVarExtra provenance disagrees with requested inputs: %s.',filename);
+    end
+    nvLabelOrderLocal([cfg.latent_labels {'All'}],E.labels);
+    row = nvLabelOrderLocal(P.meta.conditionShortLabels,E.meta.conditionShortLabels);
+    nvSizeLocal(E.condition_ids,[8 2],'Extra.condition_ids');
+    if ~isequal(double(E.condition_ids(row,:)),double(P.condition_ids)) || ...
+            ~isequal(double(E.meta.dirValues(:)),double(P.meta.dirValues(:))) || ...
+            numel(E.condition)~=numel(P.condition) || ...
+            ~isequal(sort(double([E.condition.condition_id])),sort(double([P.condition.condition_id])))
+        error('Legacy and Extra condition/direction identities disagree in %s.',filename);
+    end
+    if isfield(E.meta,'original_created_on') && isfield(P.meta,'created_on') && ...
+            ~strcmp(char(E.meta.original_created_on),char(P.meta.created_on))
+        error('Extra belongs to a different legacy result; rerun posterior_rawvar.m: %s.',filename);
+    end
+end
+
+function [Y,M,U,count] = nvSelectExtraLocal(Extra,E,A,g,cfg)
+% Returns five original categories plus All, ordered by LABEL, never by position.
+    Q = Extra.condition([Extra.condition.condition_id]==E.condition_id);
+    if numel(Q)~=1 || numel(Q.group)~=numel(E.group) || ...
+            Q.direction_index~=E.direction_index || Q.direction_value~=E.direction_value || ...
+            Q.n_trials~=E.n_trials || Q.n_bins~=E.n_bins
+        error('Extra condition metadata does not match the original posterior result.');
+    end
+    if isfield(Q,'trial_ids') && isfield(E,'trial_ids') && ~isequal(Q.trial_ids,E.trial_ids)
+        error('Extra and original trial IDs/order differ.');
+    end
+    B=Q.group(g); N=numel(A.unit_ids);
+    nvRequireLocal(B,{'unit_ids','n_neurons','raw_var','reconstruction_var', ...
+        'uncertainty_var'},'Extra group');
+    if ~isequal(double(B.unit_ids(:)),double(A.unit_ids(:))) || B.n_neurons~=N
+        error('Extra and legacy neuron IDs/order differ in group %d.',g);
+    end
+    cols=nvLabelOrderLocal([cfg.latent_labels {'All'}],Extra.labels);
+    for f={'raw_var','reconstruction_var','uncertainty_var'}
+        nvSizeLocal(B.(f{1}),[N 6],['Extra.' f{1}]);
+    end
+    Y=double(B.raw_var(:,cols)); M=double(B.reconstruction_var(:,cols));
+    U=double(B.uncertainty_var(:,cols)); count=nan(N,1);
+    nvVarianceLocal(Y,'Extra raw variance'); nvVarianceLocal(M,'Extra reconstruction');
+    % A has already been reordered to the required five labels by the caller.
+    nvNearLocal(Y(:,1:5),A.raw_var,'Extra versus legacy raw variance');
+    nvNearLocal(M(:,1:5),A.reconstruction_var,'Extra versus legacy reconstruction');
+    if cfg.uncertainty_included
+        nvVarianceLocal(U,'Extra uncertainty');
+        nvNearLocal(U(:,1:5),A.uncertainty_var,'Extra versus legacy uncertainty');
+        nvNearLocal(Y,M+U,'Extra raw = reconstruction + uncertainty');
+    else
+        nvNearLocal(Y,M,'Extra raw = reconstruction');
+    end
+    if ~strcmp(cfg.variance_normalization,'mean_count'), return; end
+    nvRequireLocal(B,{'mean_count','normalization_valid','normalized_var', ...
+        'normalized_reconstruction_var','normalized_uncertainty_var'},'Extra normalized group');
+    count=double(B.mean_count(:)); nvSizeLocal(count,[N 1],'mean_count');
+    valid=isfinite(count) & count>0;
+    flag=double(B.normalization_valid(:));
+    if numel(flag)~=N || any(~ismember(flag,[0 1])) || ~isequal(logical(flag),valid)
+        error('Extra normalization_valid disagrees with mean_count.');
+    end
+    den=count; den(~valid)=NaN;
+    for f={'normalized_var','normalized_reconstruction_var','normalized_uncertainty_var'}
+        nvSizeLocal(B.(f{1}),[N 6],['Extra.' f{1}]);
+    end
+    NY=double(B.normalized_var(:,cols)); NM=double(B.normalized_reconstruction_var(:,cols));
+    NU=double(B.normalized_uncertainty_var(:,cols));
+    nvSelectedVarianceLocal(NY,'normalized variance',true);
+    nvSelectedVarianceLocal(NM,'normalized reconstruction',true);
+    nvNearWithNaNLocal(NY,bsxfun(@rdivide,Y,den),'normalized variance / mean_count');
+    nvNearWithNaNLocal(NM,bsxfun(@rdivide,M,den),'normalized reconstruction / mean_count');
+    if cfg.uncertainty_included
+        nvSelectedVarianceLocal(NU,'normalized uncertainty',true);
+        nvNearWithNaNLocal(NU,bsxfun(@rdivide,U,den),'normalized uncertainty / mean_count');
+        nvNearWithNaNLocal(NY,NM+NU,'normalized variance decomposition');
+    end
+    Y=NY; M=NM; U=NU;
+end
+
+function nvSelectedVarianceLocal(X,label,allowNaN)
+    if ~allowNaN, nvVarianceLocal(X,label); return; end
+    if ~isnumeric(X) || ~isreal(X) || any(isinf(X(:))) || any(X(:)<0)
+        error('%s must contain nonnegative finite values or NaN for invalid mean count.',label);
+    end
+end
+
+function nvNearWithNaNLocal(A,B,label)
+    if ~isequal(size(A),size(B)) || ~isequal(isnan(A),isnan(B)) || ...
+            any(isinf(A(:))) || any(isinf(B(:)))
+        error('%s: sizes or missing-value masks disagree.',label);
+    end
+    good=isfinite(A) & isfinite(B);
+    nvNearLocal(A(good),B(good),label);
+end
+
+function dvFitPanelLocal(fig,before,rect)
+% Reuse the unchanged renderer, then place its new axes/legend/text in one row.
+% No figure/axes are copied, so legends keep their original data handles.
+    current=findall(fig);
+    added=current(~ismember(current,before));
+    for pass=1:2
+        for k=1:numel(added)
+            h=added(k); kind=get(h,'Type');
+            isAxis=strcmp(kind,'axes');
+            if (pass==1 && isAxis) || (pass==2 && ~isAxis), continue; end
+            if ~ismember(kind,{'axes','legend','textboxshape'}), continue; end
+            set(h,'Units','normalized'); p=get(h,'Position');
+            set(h,'Position',[rect(1)+p(1)*rect(3),rect(2)+p(2)*rect(4), ...
+                p(3)*rect(3),p(4)*rect(4)]);
+        end
+    end
+end
+
+function R = loadPosteriorNeuronVarianceLocal(sessionDir,cfg)
+    [filename,usedLegacy]=nvPosteriorFileLocal(sessionDir,cfg);
+    S=load(filename,'PosteriorRawVar'); nvRequireLocal(S,{'PosteriorRawVar'},filename);
+    P=S.PosteriorRawVar;
+    nvRequireLocal(P,{'format_version','meta','labels','condition_ids','condition'},filename);
+    nvValidatePosteriorModeLocal(P,cfg,usedLegacy);
+    nvRequireLocal(P.meta,{'data_content','runIdx','uncertainty_included', ...
+        'variance_source','DSL_filter','variance_method','variance_normalization', ...
+        'conditionShortLabels','dirValues'},'PosteriorRawVar.meta');
+    if ~strcmp(char(P.meta.data_content),cfg.data_content) || P.meta.runIdx~=cfg.runIdx || ...
+            ~isequal(double(P.meta.uncertainty_included),double(cfg.uncertainty_included)) || ...
+            ~strcmp(char(P.meta.variance_source),'posterior') || ...
+            ~strcmp(char(P.meta.DSL_filter),'all_latents')
+        error('Posterior content/run/mode/uncertainty/filter provenance mismatch.');
+    end
+    if ~strcmp(P.meta.variance_method,'across_trials_per_bin_mean_over_bins') || ...
+            ~strcmp(P.meta.variance_normalization,'M-1')
+        error('Require posterior per-bin M-1 trial variance averaged over bins.');
+    end
+    rowOrder=nvLabelOrderLocal(cfg.condition_labels,P.meta.conditionShortLabels);
+    colOrder=nvLabelOrderLocal(cfg.latent_labels,P.labels);
+    nvSizeLocal(P.condition_ids,[8 2],'posterior condition_ids');
+    ng=numel(cfg.group_names);
+    R=struct('source_file',filename,'direction_values',double(P.meta.dirValues(:)'), ...
+        'condition_ids',double(P.condition_ids(rowOrder,:)), ...
+        'unit_ids_by_group',{cell(1,ng)},'direction_variance',{cell(1,ng)}, ...
+        'reconstruction_by_direction',{cell(1,ng)}, ...
+        'uncertainty_by_direction',{cell(1,ng)}, ...
+        'bestmodel_files',{cell(8,2)},'DSL_threshold',NaN, ...
+        'input_format_version',char(P.format_version));
+    Extra=nvReadExtraLocal(filename,P,cfg);
+    R.original_direction_variance=cell(1,ng);
+    R.direction_all_variance=cell(1,ng);
+    R.mean_count_by_direction=cell(1,ng);
+    R.variance_normalization=cfg.variance_normalization;
+    conditionIds=double([P.condition.condition_id]);
+    if numel(conditionIds)~=16 || numel(unique(conditionIds))~=16 || ...
+            ~isequal(sort(conditionIds(:)),sort(R.condition_ids(:)))
+        error('Posterior output must contain exactly all 16 direction/condition entries.');
+    end
+    for d=1:2
+        for st=1:8
+            E=P.condition(conditionIds==R.condition_ids(st,d));
+            nvRequireLocal(E,{'feature_index','direction_index','direction_value','group', ...
+                'n_trials','n_bins','bestmodel_file'},'posterior condition');
+            if E.feature_index~=rowOrder(st) || E.direction_index~=d || ...
+                    E.direction_value~=R.direction_values(d) || numel(E.group)~=ng || ...
+                    E.n_trials<2 || E.n_bins<1
+                error('Posterior condition positions/counts/groups disagree with metadata.');
+            end
+            R.bestmodel_files{st,d}=E.bestmodel_file;
+            for g=1:ng
+                A=E.group(g);
+                nvRequireLocal(A,{'unit_ids','n_neurons','raw_var','reconstruction_var', ...
+                    'uncertainty_var'},'posterior group');
+                ids=nvIdsLocal(A.unit_ids); N=numel(ids);
+                if A.n_neurons~=N, error('Posterior neuron count mismatch.'); end
+                if isempty(R.unit_ids_by_group{g})
+                    R.unit_ids_by_group{g}=ids;
+                    R.direction_variance{g}=nan(N,8,2,5);
+                    R.original_direction_variance{g}=nan(N,8,2,5);
+                    R.direction_all_variance{g}=nan(N,8,2);
+                    R.mean_count_by_direction{g}=nan(N,8,2);
+                    R.reconstruction_by_direction{g}=nan(N,8,2,5);
+                    R.uncertainty_by_direction{g}=nan(N,8,2,5);
+                elseif ~isequal(ids,R.unit_ids_by_group{g})
+                    error('Posterior neuron IDs/order change across conditions in group %d.',g);
+                end
+                for f={'raw_var','reconstruction_var','uncertainty_var'}
+                    nvSizeLocal(A.(f{1}),[N 5],['posterior ' f{1}]);
+                end
+                Y=double(A.raw_var(:,colOrder));
+                M=double(A.reconstruction_var(:,colOrder));
+                U=double(A.uncertainty_var(:,colOrder));
+                nvVarianceLocal(Y,'posterior raw variance');
+                nvVarianceLocal(M,'posterior reconstruction variance');
+                if cfg.uncertainty_included
+                    nvVarianceLocal(U,'posterior uncertainty');
+                    nvNearLocal(Y,M+U,'posterior raw = reconstruction + uncertainty');
+                else
+                    nvNearLocal(Y,M,'posterior raw = reconstruction');
+                end
+                R.original_direction_variance{g}(:,st,d,:)=reshape(Y,N,1,1,5);
+                if ~isempty(Extra)
+                    ordered=A; ordered.raw_var=Y; ordered.reconstruction_var=M; ordered.uncertainty_var=U;
+                    [EY,EM,EU,count]=nvSelectExtraLocal(Extra,E,ordered,g,cfg);
+                    Y=EY(:,1:5); M=EM(:,1:5); U=EU(:,1:5);
+                    if cfg.analyze_all_latent_feature_effects
+                        R.direction_all_variance{g}(:,st,d)=EY(:,6);
+                    end
+                    R.mean_count_by_direction{g}(:,st,d)=count;
+                end
+                R.direction_variance{g}(:,st,d,:)=reshape(Y,N,1,1,5);
+                R.reconstruction_by_direction{g}(:,st,d,:)=reshape(M,N,1,1,5);
+                R.uncertainty_by_direction{g}(:,st,d,:)=reshape(U,N,1,1,5);
+            end
+        end
+    end
+    if strcmp(cfg.variance_unit,'rate')
+        dt=dvBinSecondsLocal(Extra.meta,'PosteriorRawVarExtra.meta');
+        R=dvScaleDirectionUnitsLocal(R,cfg,dt);
+    end
+
+end
+
+
+function order=nvLabelOrderLocal(expected,actual)
+    actual=cellstr(string(actual(:)'));
+    [ok,order]=ismember(expected,actual);
+    if numel(actual)~=numel(expected) || ~all(ok) || numel(unique(order))~=numel(expected)
+        error('Saved labels do not match the required condition/category labels.');
+    end
+end
+
+
+function ids=nvIdsLocal(ids)
+    ids=double(ids(:));
+    if isempty(ids) || any(~isfinite(ids)) || numel(unique(ids))~=numel(ids)
+        error('Model-used neuron IDs must be finite, nonempty, and unique within area.');
+    end
+end
+
+
+function nvSizeLocal(X,expected,label)
+    actual=size(X); n=max(numel(actual),numel(expected));
+    actual(end+1:n)=1; expected(end+1:n)=1;
+    if ~isnumeric(X) || ~isreal(X) || ~isequal(actual,expected)
+        error('%s has size %s; expected %s.',label,mat2str(size(X)),mat2str(expected));
+    end
+end
+
+
+function nvVarianceLocal(X,label)
+    if ~isreal(X) || any(~isfinite(X(:))) || any(X(:)<0)
+        error('%s must contain finite nonnegative variances.',label);
+    end
+end
+
+
+function nvNearLocal(A,B,label)
+    if ~isequal(size(A),size(B)) || any(~isfinite(A(:))) || any(~isfinite(B(:)))
+        error('%s: invalid values or incompatible sizes.',label);
+    end
+    if ~isempty(A) && max(abs(A(:)-B(:)))>1e-8*max(1,max(abs(B(:))))
+        error('%s: values disagree.',label);
+    end
+end
+
+
+function nvRequireLocal(S,fields,label)
+    if ~isstruct(S) || isempty(S), error('%s must be a nonempty struct.',label); end
+    for k=1:numel(fields)
+        if ~isfield(S,fields{k}), error('%s is missing %s.',label,fields{k}); end
+    end
+end
+
+
+function [filename,usedLegacy] = nvPosteriorFileLocal(sessionDir,cfg)
+    filename = fullfile(sessionDir,cfg.model_dir,'posterior_rawvar', ...
+        sprintf('postVar_%s_r%03d_%s_u%d.mat',cfg.data_content,cfg.runIdx, ...
+        cfg.mode_tag,cfg.uncertainty_included));
+    usedLegacy = false;
+    if isfile(filename), return; end
+    % Only each-condition mode may use an old, untagged v1 file. A present
+    % new file is authoritative; validation errors never trigger fallback.
+    if strcmp(cfg.model_mode,'each_condition')
+        legacy = fullfile(sessionDir,'each_condition_mode','posterior_rawvar', ...
+            sprintf('postVar_%s_r%03d_u%d.mat',cfg.data_content,cfg.runIdx,cfg.uncertainty_included));
+        if isfile(legacy)
+            filename = legacy;
+            usedLegacy = true;
+            fprintf('Using legacy each-condition posterior file: %s\n',filename);
+            return;
+        end
+    end
+    error(['Missing %s. Run posterior_rawvar.m in this session with matching ', ...
+        'data_condition (1:16 for each_condition; [] for all_condition), ', ...
+        'data_content, runIdx and uncertainty_included.'],filename);
+end
+
+
+
+function nvValidatePosteriorModeLocal(P,cfg,usedLegacy)
+    version = char(P.format_version);
+    if strcmp(version,'posterior_rawvar_eachcond_v1')
+        if ~usedLegacy || ~strcmp(cfg.model_mode,'each_condition')
+            error('Legacy posterior data are valid only at the old each-condition path.');
+        end
+        if isfield(P.meta,'model_mode') && ~strcmp(char(P.meta.model_mode),'each_condition')
+            error('Legacy posterior model mode is inconsistent.');
+        end
+        return;
+    end
+    if ~strcmp(version,'posterior_rawvar_v2')
+        error('Unsupported PosteriorRawVar format: %s.',version);
+    end
+    nvRequireLocal(P.meta,{'model_mode','mode_tag','data_condition'},'PosteriorRawVar.meta');
+    if ~strcmp(char(P.meta.model_mode),cfg.model_mode) || ~strcmp(char(P.meta.mode_tag),cfg.mode_tag)
+        error('Posterior model mode disagrees with model_mode; results are not mixed.');
+    end
+    if strcmp(cfg.model_mode,'all_condition')
+        if ~isempty(P.meta.data_condition)
+            error('All-condition posterior metadata must record data_condition = [].');
+        end
+    elseif ~isequal(sort(double(P.meta.data_condition(:))),sort(double([P.condition.condition_id]')))
+        error('Each-condition posterior selection disagrees with its condition entries.');
+    end
+    trialIds = [];
+    for ci = 1:numel(P.condition)
+        E = P.condition(ci);
+        nvRequireLocal(E,{'model_mode','model_condition_id','bestmodel_file', ...
+            'condition_id','n_trials','trial_ids','group'},'PosteriorRawVar.condition');
+        if ~strcmp(char(E.model_mode),cfg.model_mode)
+            error('A posterior condition has a different model mode.');
+        end
+        if strcmp(cfg.model_mode,'each_condition')
+            if ~isequal(double(E.model_condition_id),double(E.condition_id))
+                error('Condition-specific model ID disagrees with its output condition.');
+            end
+        else
+            if ~isempty(E.model_condition_id) || ...
+                    ~strcmp(char(E.bestmodel_file),char(P.condition(1).bestmodel_file))
+                error('All-condition posterior entries must come from one shared model.');
+            end
+            ids = double(E.trial_ids(:)');
+            if numel(ids) ~= E.n_trials || any(~isfinite(ids) | ids<1 | ids~=round(ids))
+                error('Invalid trial IDs in all-condition posterior output.');
+            end
+            trialIds = [trialIds ids]; %#ok<AGROW>
+            if numel(E.group) ~= numel(P.condition(1).group)
+                error('All-condition model group count changes across conditions.');
+            end
+            for g = 1:numel(E.group)
+                G = E.group(g); reference = P.condition(1).group(g);
+                if ~isequal(G.counts,reference.counts) || G.nLatents ~= reference.nLatents || ...
+                        ~isequal(G.category_indices,reference.category_indices)
+                    error('All-condition latent classification changes across conditions.');
+                end
+            end
+        end
+    end
+    if numel(unique(trialIds)) ~= numel(trialIds)
+        error('An all-condition posterior trial appears in more than one condition.');
+    end
+end
+
+
+
+function cfg = dvUnitConfigLocal(cfg,unit)
+    cfg.variance_unit=lower(strtrim(char(unit)));
+    if ~ismember(cfg.variance_unit,{'count','rate'})
+        error('variance_unit must be ''count'' or ''rate''.');
+    end
+    if strcmp(cfg.variance_unit,'rate') && ~contains(lower(cfg.data_content),'count')
+        error('variance_unit=''rate'' converts count-based data_content; do not convert already-rate or z-scored inputs.');
+    end
+    cfg.unit_tag='ct'; cfg.normalization_denominator='none';
+    if strcmp(cfg.variance_unit,'rate'), cfg.unit_tag='hz'; end
+    if strcmp(cfg.variance_normalization,'mean_count')
+        if strcmp(cfg.variance_unit,'rate'), cfg.normalization_denominator='mean_rate';
+        else, cfg.normalization_denominator='mean_count'; end
+    end
+end
+
+function R = dvScaleDirectionUnitsLocal(R,cfg,dt)
+% Apply the selected unit BEFORE directions, contrasts and Z baselines.
+% original_direction_variance remains in count units for legacy validation.
+    R.bin_size_seconds=dt; R.variance_unit=cfg.variance_unit;
+    R.normalization_denominator=cfg.normalization_denominator;
+    R.unit_scale=1;
+    if ~strcmp(cfg.variance_unit,'rate'), return; end
+    power=2;
+    if strcmp(cfg.variance_normalization,'mean_count'), power=1; end
+    R.unit_scale=1/dt^power;
+    for f={'direction_variance','direction_all_variance', ...
+            'reconstruction_by_direction','uncertainty_by_direction'}
+        if ~isfield(R,f{1}), continue; end
+        for g=1:numel(R.(f{1}))
+            R.(f{1}){g}=R.(f{1}){g}./(dt^power);
+        end
+    end
+    if isfield(R,'mean_count_by_direction')
+        R.mean_rate_by_direction=cell(size(R.mean_count_by_direction));
+        for g=1:numel(R.mean_count_by_direction)
+            R.mean_rate_by_direction{g}=R.mean_count_by_direction{g}./dt;
+        end
+    end
+end
+
+function dt = dvModelBinSecondsLocal(sessionDir,meta)
+% Match the model's saved stimulus tag, rather than assuming a run index.
+    if isfield(meta,'bin_size') || isfield(meta,'bin_size_seconds')
+        dt=dvBinSecondsLocal(meta,'model variance metadata'); return;
+    end
+    if ~isfield(meta,'stim_tag') || isempty(meta.stim_tag)
+        error('Model variance metadata lacks stim_tag needed to select the bin width.');
+    end
+    filename=fullfile(sessionDir,'model_data_allruns.mat');
+    if ~isfile(filename), error('Missing bin-width metadata: %s',filename); end
+    S=load(filename,'model_data_allruns');
+    if ~isfield(S,'model_data_allruns') || ~iscell(S.model_data_allruns)
+        error('model_data_allruns must be a cell array in %s.',filename);
+    end
+    tags=cellfun(@(x)char(x.stim_tag),S.model_data_allruns,'UniformOutput',false);
+    index=find(strcmp(tags,char(meta.stim_tag)));
+    if numel(index)~=1, error('The model stim_tag does not select exactly one bin-width metadata entry.'); end
+    dt=dvBinSecondsLocal(S.model_data_allruns{index},filename);
+end
+
+function label = dvUnitAxisLabelLocal(label,cfg)
+    normalized=strcmp(cfg.variance_normalization,'mean_count');
+    if strcmp(cfg.variance_unit,'count')
+        if normalized && isempty(strfind(label,'mean count')) %#ok<STREMP>
+            label=strrep(label,'Z(Var)','Z(Var / mean count)');
+            if isempty(strfind(label,'mean count')) %#ok<STREMP>
+                label=strrep(label,'Var','(Var / mean count)');
+            end
+        end
+        return;
+    end
+    % A pre-built All ylabel may already mention its count normalization.
+    if ~isempty(strfind(label,'mean count')) %#ok<STREMP>
+        label=strrep(label,'Var','Var(rate)');
+        label=strrep(label,'mean count','mean rate');
+    elseif normalized
+        label=strrep(label,'Z(Var)','Z(Var(rate) / mean rate)');
+        if isempty(strfind(label,'mean rate')) %#ok<STREMP>
+            label=strrep(label,'Var','(Var(rate) / mean rate)');
+        end
+    else
+        label=strrep(label,'Var','Var(rate)');
+    end
+end
+
+function dt = dvBinSecondsLocal(meta,context)
+% processing_to_count_and_fr stores bin_size/bin_edges/bin_centers in SECONDS.
+    dt=NaN;
+    if isfield(meta,'bin_size_seconds') && ~isempty(meta.bin_size_seconds)
+        dt=double(meta.bin_size_seconds);
+    elseif isfield(meta,'bin_size') && ~isempty(meta.bin_size)
+        dt=double(meta.bin_size);
+    end
+    if ~isnumeric(dt) || ~isreal(dt) || ~isscalar(dt) || ~isfinite(dt) || dt<=0
+        error('variance_units:BinWidth', ...
+            '%s must provide a finite positive bin_size in seconds; no bin width is guessed.',context);
+    end
+    if isfield(meta,'bin_size') && isnumeric(meta.bin_size) && ...
+            isscalar(meta.bin_size) && isfinite(meta.bin_size) && ...
+            abs(double(meta.bin_size)-dt)>1e-9*max(dt,eps)
+        error('variance_units:BinWidth','bin_size and bin_size_seconds disagree in %s.',context);
+    end
+    for f={'bin_edges','bin_centers'}
+        if ~isfield(meta,f{1}) || isempty(meta.(f{1})), continue; end
+        v=double(meta.(f{1}));
+        if ~isreal(v) || ~isvector(v) || any(~isfinite(v(:)))
+            error('variance_units:BinWidth','Invalid %s in %s.',f{1},context);
+        end
+        if numel(v)>1 && any(abs(diff(v(:))-dt)>1e-7*max(dt,eps))
+            error('variance_units:BinWidth','%s does not match bin_size in seconds in %s.',f{1},context);
+        end
+    end
+end
+
+function D = dvScaleModelSessionUnitsLocal(D,cfg)
+    D.variance_unit=cfg.variance_unit;
+    if ~strcmp(cfg.variance_unit,'rate'), return; end
+    n=numel(D.observation_info);
+    D.bin_size_seconds=nan(n,1); D.unit_scale=nan(n,1);
+    sessions=unique([D.observation_info.session_index],'stable');
+    for s=sessions(:)'
+        rec=recordAtLocal(D.session_records,s);
+        sessionDir=char(rec.session_dir);
+        if ~isfolder(sessionDir)
+            parts=regexp(char(rec.session_name),'[\\/]','split');
+            sessionDir=fullfile(cfg.root_dir,parts{:});
+        end
+        if ~isfield(rec,'bestmodel_files') || isempty(rec.bestmodel_files)
+            error('Saved model summary lacks bestmodel_files needed for the rate conversion.');
+        end
+        candidates=rec.bestmodel_files;
+        index=find(~cellfun(@isempty,candidates),1);
+        if isempty(index), error('Saved model summary has no source bestmodel path.'); end
+        file=char(candidates{index});
+        if ~isfile(file)
+            old=strrep(file,'\',filesep); [~,name,ext]=fileparts(old);
+            cond=rec.condition_ids(index);
+            file=fullfile(sessionDir,sprintf('FA_Dlag_%s_condition%d',cfg.data_content,cond), ...
+                'mat_results',sprintf('run%03d',cfg.runIdx),[name ext]);
+        end
+        if ~isfile(file), error('Missing model source for bin-width selection: %s',file); end
+        S=load(file,'varexp_raw');
+        if ~isfield(S,'varexp_raw') || ~isfield(S.varexp_raw,'meta')
+            error('Missing varexp_raw.meta in %s.',file);
+        end
+        dt=dvModelBinSecondsLocal(sessionDir,S.varexp_raw.meta);
+        obs=find([D.observation_info.session_index]==s);
+        D.raw_variance_mean(obs,:,:,:,:)=D.raw_variance_mean(obs,:,:,:,:)./(dt^2);
+        if ~isempty(D.all_variance_mean)
+            D.all_variance_mean(obs,:,:,:)=D.all_variance_mean(obs,:,:,:)./(dt^2);
+        end
+        if isfield(D,'saved_balances'), D.saved_balances(obs,:,:,:)=D.saved_balances(obs,:,:,:)./(dt^2); end
+        D.bin_size_seconds(obs)=dt; D.unit_scale(obs)=1/dt^2;
+    end
+    D=rmfield(D,'session_records');
 end
