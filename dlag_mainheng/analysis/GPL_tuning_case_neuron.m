@@ -32,6 +32,10 @@
 %   when applicable, e.g. Group1_V1_neuron125_tuning_SD_sponsub.svg.
 % - Different groups may request different numbers of cells; [] skips a
 %   group. A target neuron absent from GPL data is reported and skipped.
+% - Poster display: outward ticks, Arial 30-pt text, and the y-axis label
+%   Firing rate (spikes/s) in both raw and baseline-subtracted modes.
+% - error_method selects the saved SEM/SD values; error_style independently
+%   selects a shaded error band or error bars at each measured direction.
 % =========================================================================
 
 clc;
@@ -39,7 +43,7 @@ clear;
 
 %% ----------------------- User parameters -----------------------
 root_folder = 'I:\np_data';
-runName = 'RafiL001p0120';
+runName = 'RafiL001p0122';
 runind = 1;
 
 % All model groups, in their original model-group order. Keep these equal
@@ -50,8 +54,8 @@ group_names = {'V1', 'MT'};
 % One entry per model group. Any number of local IDs, or [] to skip.
 % Example: {[125 173], []} plots only the two Group-1 neurons.
 case_neuron_ids = { ...
-    [125 173], ...  % Group 1: V1
-    [36 165]   ...  % Group 2: MT; replace with [] to skip
+    [13], ...  % Group 1: V1
+    [83 155]   ...  % Group 2: MT; replace with [] to skip
     };
 
 % Check stimulus identities against the selected saved analysis.
@@ -64,19 +68,24 @@ target_stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 subtract_spontaneous = true;
 gpl_mat_name = 'unit_gpl_results.mat';
 
-% Error band: 'SEM' or 'SD'. Both are already present in the input MAT.
-error_method = 'SD';
+% Error magnitude: 'SEM' or 'SD'. Both are already present in the input MAT.
+error_method = 'SEM';
+
+% Error display: 'shaded' (gray band) or 'errorbar' (one bar per data point).
+error_style = 'shaded';
 
 save_svg = true;
-save_png = true;
-save_fig = true;
-close_after_save = false;
+save_png = false;
+save_fig = false;
+close_after_save = true;
 figure_visibility = 'on';
 
-figure_width = 1000;
-figure_height = 460;
-axis_font_size = 11;
-panel_title_font_size = 12;
+% Larger canvas/margins accommodate the requested 30-point text.
+figure_width = 1600;
+figure_height = 800;
+font_name = 'Arial';
+axis_font_size = 30;
+panel_title_font_size = 30;
 curve_line_width = 1.5;
 png_dpi = 300;
 
@@ -127,6 +136,10 @@ error_method = upper(char(error_method));
 if ~any(strcmp(error_method, {'SEM', 'SD'}))
     error('error_method must be ''SEM'' or ''SD''.');
 end
+error_style = lower(char(error_style));
+if ~any(strcmp(error_style, {'shaded', 'errorbar'}))
+    error('error_style must be ''shaded'' or ''errorbar''.');
+end
 if ~any(strcmp(lower(char(figure_visibility)), {'on', 'off'}))
     error('figure_visibility must be ''on'' or ''off''.');
 end
@@ -147,13 +160,12 @@ end
 %% ----------------------- Locate the saved GPL results -----------------------
 run_g = sprintf('%s_g%d', runName, runind);
 cat_folder = fullfile(root_folder, run_g, ['catgt_' run_g]);
+response_axis_label = 'Firing rate (spikes/s)';
 if subtract_spontaneous
     output_suffix = '_sponsub';
-    response_axis_label = 'Baseline-subtracted firing rate (spikes/s)';
     state_label = 'baseline subtracted';
 else
     output_suffix = '';
-    response_axis_label = 'Firing rate (spikes/s)';
     state_label = 'raw firing rate';
 end
 input_mat_name = append_suffix_before_extension_local(gpl_mat_name, output_suffix);
@@ -242,7 +254,8 @@ for probe_idx = 1:numel(probes_to_process)
                     row = selected_rows(neuron_idx);
                     local_id = selected_ids(neuron_idx);
                     fig = figure('Color', 'w', 'Visible', figure_visibility, ...
-                        'Position', [80 80 figure_width figure_height]);
+                        'Position', [80 80 figure_width figure_height], ...
+                        'PaperPositionMode', 'auto');
                     figure_title = sprintf('Group %d: %s | local ID %d | %s (%s)', ...
                         model_group_index, group_names{model_group_index}, ...
                         local_id, state_label, error_method);
@@ -255,7 +268,8 @@ for probe_idx = 1:numel(probes_to_process)
                         response_axis_label, ...
                         sprintf('Grating | ID %d\nDI=%.3f  OSI=%.3f', ...
                         local_id, result.grating.DI(row), result.grating.OSI(row)), ...
-                        axis_font_size, panel_title_font_size, curve_line_width);
+                        axis_font_size, panel_title_font_size, curve_line_width, ...
+                        error_style, font_name);
                     ax_plaid = axes('Parent', fig, ...
                         'Position', [0.60 0.18 0.35 0.60]);
                     draw_tuning_panel_local(ax_plaid, ...
@@ -263,9 +277,11 @@ for probe_idx = 1:numel(probes_to_process)
                         plaid_error(row, :), 'Plaid direction (deg)', ...
                         response_axis_label, ...
                         sprintf('Plaid | ID %d\nPI=%.3f', local_id, result.plaid.PI(row)), ...
-                        axis_font_size, panel_title_font_size, curve_line_width);
+                        axis_font_size, panel_title_font_size, curve_line_width, ...
+                        error_style, font_name);
                     sgtitle(figure_title, 'Interpreter', 'none', ...
-                        'FontWeight', 'normal', 'FontSize', panel_title_font_size);
+                        'FontWeight', 'normal', 'FontSize', panel_title_font_size, ...
+                        'FontName', font_name);
 
                     file_base = sprintf('%s_neuron%d_tuning_%s%s', ...
                         group_file_tag, local_id, error_method, output_suffix);
@@ -381,8 +397,9 @@ function [mean_fr, err_fr] = get_tuning_display_local(tuning, error_method, spon
 end
 
 function draw_tuning_panel_local(ax, directions, mean_fr, err_fr, ...
-        x_label, y_label, panel_title, axis_font_size, title_font_size, line_width)
-% Match the compact tuning-grid style, adding readable axes and labels.
+        x_label, y_label, panel_title, axis_font_size, title_font_size, line_width, ...
+        error_style, font_name)
+% Poster axes with outward ticks and either a band or per-direction bars.
 
     directions = double(directions(:)');
     mean_fr = double(mean_fr(:)');
@@ -394,20 +411,36 @@ function draw_tuning_panel_local(ax, directions, mean_fr, err_fr, ...
     upper_fr = mean_fr + err_fr;
     lower_fr = mean_fr - err_fr;
     valid = isfinite(directions) & isfinite(upper_fr) & isfinite(lower_fr);
-    if sum(valid) >= 2
-        x_band = directions(valid);
-        upper_use = upper_fr(valid);
-        lower_use = lower_fr(valid);
-        fill(ax, [x_band fliplr(x_band)], [upper_use fliplr(lower_use)], ...
-            [0.75 0.75 0.75], 'EdgeColor', 'none');
+    switch error_style
+        case 'shaded'
+            if sum(valid) >= 2
+                x_band = directions(valid);
+                upper_use = upper_fr(valid);
+                lower_use = lower_fr(valid);
+                fill(ax, [x_band fliplr(x_band)], [upper_use fliplr(lower_use)], ...
+                    [0.75 0.75 0.75], 'EdgeColor', 'none');
+            end
+        case 'errorbar'
+            if any(valid)
+                errorbar(ax, directions(valid), mean_fr(valid), err_fr(valid), ...
+                    'LineStyle', 'none', 'Color', [0 0 0], ...
+                    'LineWidth', line_width, 'CapSize', 10, ...
+                    'Marker', 'o', 'MarkerSize', 5, ...
+                    'MarkerFaceColor', [0 0 0], 'MarkerEdgeColor', 'none');
+            end
     end
     plot(ax, directions, mean_fr, 'Color', [0 0 0], 'LineWidth', line_width);
     xlim(ax, [0 360]);
-    set(ax, 'XTick', 0:90:360, 'FontSize', axis_font_size);
-    xlabel(ax, x_label, 'Interpreter', 'none');
-    ylabel(ax, y_label, 'Interpreter', 'none');
+    set(ax, 'XTick', 0:90:360, 'TickDir', 'out', ...
+        'FontName', font_name, 'FontSize', axis_font_size, ...
+        'TickLabelInterpreter', 'none');
+    xlabel(ax, x_label, 'Interpreter', 'none', ...
+        'FontName', font_name, 'FontSize', axis_font_size);
+    ylabel(ax, y_label, 'Interpreter', 'none', ...
+        'FontName', font_name, 'FontSize', axis_font_size);
     title(ax, panel_title, 'Interpreter', 'none', ...
-        'FontWeight', 'normal', 'FontSize', title_font_size);
+        'FontWeight', 'normal', 'FontSize', title_font_size, ...
+        'FontName', font_name);
     box(ax, 'off');
 
     % Include negative means/error bands and retain an independent scale
