@@ -1,5 +1,7 @@
 %% timescale_compare_figure.m
 % Poster version of sum_sessions_timescale_compare.m.
+% Poster typography: Arial 30 pt for axes, session/category labels, condition
+% labels and legends. Canvas and panel margins accommodate the larger text.
 %
 % Run sum_sessions_timescale_compare.m with save_mat = true first. This
 % standalone SCRIPT reads its MultiSessionTimescale MAT, not the individual
@@ -45,23 +47,23 @@ plot_session_mode = 'pool_sessions';
 group_names = {'V1', 'MT'};
 
 figure_visible = 'on';
-save_fig = false;
+save_fig = true;
 save_svg = true;
 save_png = false;
 save_meta_mat = false;
 png_dpi = 300;
-close_after_save = true;
+close_after_save = false;
 
 % The ONLY saturated colors in the figure represent areas.
 area_colors = [0.0000, 0.4470, 0.7410; ...
                0.8500, 0.3250, 0.0980];
-shared_gray = [0.42, 0.42, 0.42];
-axis_gray = [0.24, 0.24, 0.24];
-guide_gray = [0.83, 0.83, 0.83];
-division_gray = [0.62, 0.62, 0.62];
+shared_gray =  [0 0 0];
+axis_gray = [0 0 0];
+guide_gray =[0.3 0.3 0.3];
+division_gray = [0.3 0.3 0.3];
 
-point_size = 27;
-point_alpha = 0.75;
+point_size = 50;
+point_alpha = 1;
 point_jitter_width_pool = 0.38;
 point_jitter_width_separate = 0.12;
 
@@ -74,8 +76,8 @@ timescale_division_lines = []; % [] disables the lines
 timescale_division_line_width = 1.0;
 
 font_name = 'Arial';
-axis_font_size = 10;
-panel_font_size = 10;
+axis_font_size = 30; % points; axes, labels and legend
+panel_font_size = 30; % points; condition labels
 
 %% ============================ READ SUMMARY =============================
 
@@ -235,21 +237,22 @@ if cfg.condition_specific
     num_columns = min(2, num_conditions);
     num_rows = ceil(num_conditions/num_columns);
     if cfg.pool_sessions
-        panel_width_inches = 7.0;
+        panel_width_inches = 14.0;
     else
-        panel_width_inches = max(9.0, 1.12*num_sessions+5);
+        panel_width_inches = max(18.0, 1.8*num_sessions+8);
     end
     fig_width_inches = num_columns*panel_width_inches;
-    fig_height_inches = max(4.0, num_rows*3.05 + 0.6);
+    fig_height_inches = max(10.5, num_rows*10.5 + 0.9);
 else
     num_columns = 1;
     num_rows = 1;
     if cfg.pool_sessions
-        fig_width_inches = 10.5;
+        fig_width_inches = 18.0;
+        fig_height_inches = 9.5;
     else
-        fig_width_inches = max(14.0, 1.28*num_sessions + 8);
+        fig_width_inches = max(22.0, 1.8*num_sessions + 12);
+        fig_height_inches = 12.0;
     end
-    fig_height_inches = 5.5;
 end
 fig = figure('Visible', figure_visible, 'Color', 'w', ...
     'Units', 'inches', 'Position', ...
@@ -264,35 +267,40 @@ if cfg.condition_specific
         row = ceil(p/num_columns);
         col = mod(p-1,num_columns)+1;
         panel_band = 0.84/num_rows;
-        left = (col-1)/num_columns + 0.092/num_columns;
-        width = 0.83/num_columns;
+        left = (col-1)/num_columns + 0.14/num_columns;
+        width = 0.78/num_columns;
         bottom = 0.082 + (num_rows-row)*panel_band + ...
             0.26*panel_band;
-        height = 0.68*panel_band;
+        height = 0.63*panel_band;
         ax = axes('Parent',fig, 'Units','normalized', ...
             'Position',[left, bottom, width, height]);
         plotOnePanelLocal(ax, M, p, cfg);
         if col == 1
             ylabel(ax,'Timescale (ms)', ...
-                'FontName', font_name, 'FontSize', axis_font_size+1);
+                'FontName', font_name, 'FontSize', axis_font_size);
         else
             set(ax, 'YTickLabel', []);
         end
-        text(ax, 0.015, 0.965, condition_labels{p}, ...
+        text(ax, 0.015, 1.04, condition_labels{p}, ...
             'Units','normalized','FontName',font_name, ...
             'FontSize',panel_font_size, 'FontWeight','bold', ...
-            'Color',axis_gray, 'VerticalAlignment','top', ...
-            'Interpreter','none');
+            'Color',axis_gray, 'VerticalAlignment','bottom', ...
+            'Interpreter','none', 'Clipping','off');
         if p == 1
             first_ax = ax;
         end
     end
 else
-    ax = axes('Parent',fig,'Units','normalized', ...
-        'Position',[0.095, 0.18, 0.87, 0.70]);
+    if cfg.pool_sessions
+        main_pos = [0.11, 0.19, 0.855, 0.69];
+    else
+        % Session ticks and the category labels below them need two rows.
+        main_pos = [0.11, 0.32, 0.855, 0.56];
+    end
+    ax = axes('Parent',fig,'Units','normalized', 'Position',main_pos);
     plotOnePanelLocal(ax, M, 0, cfg);
     ylabel(ax,'Timescale (ms)', ...
-        'FontName',font_name,'FontSize',axis_font_size+1);
+        'FontName',font_name,'FontSize',axis_font_size);
     first_ax = ax;
 end
 addAreaLegendLocal(first_ax, cfg.area_names, cfg.area_colors, ...
@@ -536,7 +544,8 @@ function plotOnePanelLocal(ax,M,conditionIndex,cfg)
     ylabels = arrayfun(@(v) sprintf('%g',v),yt,'UniformOutput',false);
     ylabels{end+1} = sprintf('>%g',cfg.regular_max);
     set(ax,'YTick',[yt,cfg.overflow_y],'YTickLabel',ylabels, ...
-        'FontName',cfg.font_name,'FontSize',cfg.axis_font_size, ...
+        'FontName',cfg.font_name,'FontUnits','points', ...
+        'FontSize',cfg.axis_font_size, ...
         'XColor',cfg.axis_gray,'YColor',cfg.axis_gray, ...
         'TickDir','out','LineWidth',0.9,'Box','off', ...
         'XGrid','off','YGrid','off');
@@ -617,11 +626,11 @@ function plotOnePanelLocal(ax,M,conditionIndex,cfg)
         set(ax,'XTick',ticks,'XTickLabel',tickLabels, ...
             'XTickLabelRotation',57, ...
             'TickLabelInterpreter','none', ...
-            'FontSize',max(7,cfg.axis_font_size-2));
+            'FontSize',cfg.axis_font_size);
         xBounds = xlim(ax);
         for c = 1:5
             xFraction = (positions(c).center-xBounds(1))/diff(xBounds);
-            text(ax,xFraction,-0.38,cfg.category_labels{c}, ...
+            text(ax,xFraction,-0.30,cfg.category_labels{c}, ...
                 'Units','normalized','HorizontalAlignment','center', ...
                 'FontName',cfg.font_name,'FontSize',cfg.axis_font_size, ...
                 'FontWeight','bold','Color',cfg.axis_gray, ...
@@ -643,7 +652,7 @@ function drawCloudLocal(ax,x0,vals,color,sz,alpha,jitterWidth,seed)
             seed*0.137508,1)-0.5);
     end
     dots = scatter(ax,x0+offset,vals,sz,'o','filled', ...
-        'MarkerFaceColor',color,'MarkerEdgeColor','none', ...
+        'MarkerFaceColor',color,'MarkerEdgeColor',[0.6 0.6 0.6], ...
         'HandleVisibility','off');
     try
         dots.MarkerFaceAlpha = alpha;
@@ -666,7 +675,7 @@ function addAreaLegendLocal(ax,labels,colors,fontName,fontSize,manyPanels)
         g = firstIndex(k);
         handles(k) = plot(ax,nan,nan,'o','MarkerSize',7, ...
             'MarkerFaceColor',colors(g,:), ...
-            'MarkerEdgeColor',colors(g,:), ...
+            'MarkerEdgeColor','none', ...
             'LineStyle','none');
     end
     oldPosition = get(ax,'Position');
@@ -675,10 +684,14 @@ function addAreaLegendLocal(ax,labels,colors,fontName,fontSize,manyPanels)
         'FontName',fontName,'FontSize',fontSize, ...
         'Interpreter','none','AutoUpdate','off');
     lgd.Units = 'normalized';
+    figure_position = get(ancestor(ax,'figure'),'Position'); % inches
+    text_height = 1.5*fontSize/(72*figure_position(4));
     if manyPanels
-        lgd.Position = [0.75, 0.965, 0.23, 0.025];
+        legend_height = max(0.025,text_height);
+        lgd.Position = [0.75, 0.99-legend_height, 0.23, legend_height];
     else
-        lgd.Position = [0.71, 0.925, 0.26, 0.04];
+        legend_height = max(0.04,text_height);
+        lgd.Position = [0.71, 0.98-legend_height, 0.26, legend_height];
     end
     set(ax,'Position',oldPosition);
 end

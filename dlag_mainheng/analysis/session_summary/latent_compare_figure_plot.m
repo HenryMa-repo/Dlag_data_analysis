@@ -1,5 +1,9 @@
 %% latent_compare_figure_plot.m
 % Poster figure for latent-category summaries across sessions and areas.
+% All axes, category/condition labels and legends use Arial 30 pt. The
+% larger canvas reserves space for labels outside the plotted data.
+% Neutral colors use the same shared_gray/axis_gray/guide_gray/division_gray
+% controls as timescale_compare_figure; area-specific data retain area colors.
 %
 % Place this standalone script alongside sum_sessions_latent_compare.m. It
 % reads the SAME Latents_compare.m results, uses the SAME per-session values,
@@ -125,7 +129,7 @@ DSL_filter = 'all_latents';
 % -------------------------------------------------------------------------
 % Metric
 % -------------------------------------------------------------------------
-metric_name = 'percentSharedVariance';
+metric_name = 'percentLatents';
 % Options:
 %   'percentLatents'
 %   'percentSharedVariance'
@@ -142,12 +146,12 @@ group_names = {'V1', 'MT'};
 % -------------------------------------------------------------------------
 % Save options
 % -------------------------------------------------------------------------
-save_mat = true;
-save_fig = false;
+save_mat = false;
+save_fig = true;
 save_svg = true;
 save_png = false;
 png_dpi = 300;
-close_after_save = true;
+close_after_save = false;
 
 % Print full MATLAB error report for skipped sessions.
 print_full_error_report = false;
@@ -163,16 +167,24 @@ fig_visible = 'on';   % 'on' or 'off'
 area_colors = [0.0000, 0.4470, 0.7410; ...  % V1: blue
                0.8500, 0.3250, 0.0980];    % MT: orange
 
+% Same neutral-color controls as timescale_compare_figure.
+% All area-specific bars, violins and dots continue to use area_colors.
+shared_gray = [0 0 0];       % mean/median marks and neutral point outlines
+axis_gray = [0 0 0];         % axes, labels, panel labels and legend text
+guide_gray = [0.3 0.3 0.3];  % vertical category separators
+division_gray = [0.3 0.3 0.3]; % optional horizontal reference lines
+latent_division_lines = []; % metric units (%); [] keeps reference lines off
+
 % Distances are in x-axis data units. Areas within one latent category are
 % adjacent; there is a wider gap between different latent categories.
 within_category_area_spacing = 1.0;
 between_category_spacing = 1.9;
 
 % FIG/SVG sizes in inches; vector export is suited to poster composition.
-pooled_figure_size_inches = [10.4, 5.1];
-condition_panel_size_inches = [7.3, 3.5]; % 2 columns, one row per 2 conditions
-axis_font_size = 10;
-category_font_size = 9;
+pooled_figure_size_inches = [18.0, 9.0];
+condition_panel_size_inches = [16.0, 9.0]; % 2 columns, one row per 2 conditions
+axis_font_size = 30; % points; axes, labels, condition labels and legend
+category_font_size = 30; % points; category tick labels
 
 plot_style = 'points_median';
 % Options:
@@ -195,8 +207,8 @@ plot_show_median = struct( ...
     'violin', true, ...
     'points_median', true);
 
-point_size =50;
-point_alpha = 0.70;
+point_size =70;
+point_alpha = 1;
 
 % Maximum absolute horizontal displacement of points from their category
 % center. Jitter is deterministic, so rerunning gives the same positions.
@@ -243,6 +255,18 @@ validateattributes(between_category_spacing, {'numeric'}, ...
     mfilename, 'between_category_spacing');
 validateattributes(area_colors, {'numeric'}, ...
     {'2d', 'ncols', 3, 'real', 'finite', '>=', 0, '<=', 1}, mfilename, 'area_colors');
+gray_colors = {shared_gray, axis_gray, guide_gray, division_gray};
+gray_color_names = {'shared_gray', 'axis_gray', 'guide_gray', 'division_gray'};
+for k = 1:numel(gray_colors)
+    validateattributes(gray_colors{k}, {'numeric'}, ...
+        {'size', [1 3], 'real', 'finite', '>=', 0, '<=', 1}, ...
+        mfilename, gray_color_names{k});
+end
+validateattributes(latent_division_lines, {'numeric'}, ...
+    {'real', 'finite'}, mfilename, 'latent_division_lines');
+if ~isempty(latent_division_lines) && ~isvector(latent_division_lines)
+    error('latent_division_lines must be a vector or [].');
+end
 validateattributes(axis_font_size, {'numeric'}, ...
     {'scalar', 'positive', 'finite'}, mfilename, 'axis_font_size');
 validateattributes(category_font_size, {'numeric'}, ...
@@ -365,6 +389,11 @@ plot_config.png_dpi = png_dpi;
 plot_config.category_order_indices = plot_category_indices;
 plot_config.category_order_labels = plot_category_labels;
 plot_config.area_colors = group_colors;
+plot_config.shared_gray = shared_gray;
+plot_config.axis_gray = axis_gray;
+plot_config.guide_gray = guide_gray;
+plot_config.division_gray = division_gray;
+plot_config.division_lines = latent_division_lines;
 plot_config.within_category_area_spacing = within_category_area_spacing;
 plot_config.between_category_spacing = between_category_spacing;
 plot_config.pooled_figure_size_inches = pooled_figure_size_inches;
@@ -1121,10 +1150,11 @@ function fig = plotByConditionSummary(M, fig_visible, config)
         col = mod(p - 1, nCols) + 1;
 
         % Explicit axes positions leave room for category tick labels.
-        left = (col - 1) / nCols + 0.095 / nCols;
-        width = 0.835 / nCols;
-        bottom = 1 - (row - 1 + 0.79) / nRows;
-        height = 0.65 / nRows;
+        panel_band = 0.88 / nRows;
+        left = (col - 1) / nCols + 0.15 / nCols;
+        width = 0.78 / nCols;
+        bottom = 0.075 + (nRows - row) * panel_band + 0.20 * panel_band;
+        height = 0.63 * panel_band;
         ax = axes('Parent', fig, 'Position', [left, bottom, width, height]);
         hold(ax, 'on');
 
@@ -1140,7 +1170,7 @@ function fig = plotByConditionSummary(M, fig_visible, config)
                     config.point_jitter_width, config.show_mean, ...
                     config.show_median, config.mean_marker_size, ...
                     config.median_marker_size, config.median_line_width, ...
-                    jitter_seed);
+                    jitter_seed, config.shared_gray);
             end
         end
 
@@ -1151,16 +1181,17 @@ function fig = plotByConditionSummary(M, fig_visible, config)
         end
         if col == 1
             ylabel(ax, metricLabel(M.meta.metric_name), ...
-                'FontName', 'Arial', 'FontSize', config.axis_font_size);
+                'FontName', 'Arial', 'FontSize', config.axis_font_size, ...
+                'Color', config.axis_gray);
         end
-        text(ax, 0.025, 0.96, condition_labels{p}, ...
+        text(ax, 0.025, 1.035, condition_labels{p}, ...
             'Units', 'normalized', 'FontName', 'Arial', ...
             'FontSize', config.axis_font_size, 'FontWeight', 'bold', ...
-            'Color', [0.35 0.35 0.35], 'VerticalAlignment', 'top', ...
+            'Color', config.axis_gray, 'VerticalAlignment', 'bottom', ...
             'Interpreter', 'none', 'Clipping', 'off');
     end
     addAreaLegendLocal(first_ax, M.meta.group_names, ...
-        config.area_colors, config.axis_font_size, true);
+        config.area_colors, config.axis_font_size, true, config.axis_gray);
 end
 
 function fig = plotPooledCategorySummary(M, fig_visible, config)
@@ -1170,7 +1201,7 @@ function fig = plotPooledCategorySummary(M, fig_visible, config)
     numCat = size(values, 3);
     fig = createPosterFigureLocal( ...
         fig_visible, config.pooled_figure_size_inches);
-    ax = axes('Parent', fig, 'Position', [0.09, 0.20, 0.87, 0.69]);
+    ax = axes('Parent', fig, 'Position', [0.12, 0.20, 0.84, 0.69]);
     hold(ax, 'on');
 
     [x, separators] = buildCategoryPositionsLocal( ...
@@ -1190,16 +1221,17 @@ function fig = plotPooledCategorySummary(M, fig_visible, config)
                 config.pooled_point_jitter_width, config.show_mean, ...
                 config.show_median, config.mean_marker_size, ...
                 config.median_marker_size, config.median_line_width, ...
-                jitter_seed);
+                jitter_seed, config.shared_gray);
         end
     end
 
     formatPosterAxesLocal(ax, x, separators, yMax, ...
         config.category_order_labels, config);
     ylabel(ax, metricLabel(M.meta.metric_name), ...
-        'FontName', 'Arial', 'FontSize', config.axis_font_size);
+        'FontName', 'Arial', 'FontSize', config.axis_font_size, ...
+        'Color', config.axis_gray);
     addAreaLegendLocal(ax, M.meta.group_names, ...
-        config.area_colors, config.axis_font_size, false);
+        config.area_colors, config.axis_font_size, false, config.axis_gray);
 end
 
 function fig = createPosterFigureLocal(visibility, sizeInches)
@@ -1224,26 +1256,33 @@ function formatPosterAxesLocal(ax, positions, separators, yMax, ...
     margin = max(0.55, config.within_category_area_spacing * 0.57);
     allX = reshape(positions, 1, []);
     categoryCenters = mean(positions, 1);
-    set(ax, 'FontName', 'Arial', 'FontSize', config.category_font_size, ...
+    set(ax, 'FontName', 'Arial', 'FontUnits', 'points', ...
+        'FontSize', config.category_font_size, ...
         'TickDir', 'out', 'TickLength', [0.008, 0.008], ...
         'LineWidth', 0.9, 'Box', 'off', 'XGrid', 'off', 'YGrid', 'off', ...
-        'XColor', [0.28 0.28 0.28], 'YColor', [0.28 0.28 0.28], ...
+        'XColor', config.axis_gray, 'YColor', config.axis_gray, ...
         'XTick', categoryCenters, 'XTickLabel', category_labels, ...
         'TickLabelInterpreter', 'none');
     xlim(ax, [min(allX) - margin, max(allX) + margin]);
     ylim(ax, [0 yMax]);
 
-    % Gray boundaries make the category blocks easy to follow; there is no
-    % horizontal grid and no category- or condition-specific color coding.
+    % Category boundaries and optional reference lines stay neutral.
     for k = 1:numel(separators)
         line(ax, [separators(k) separators(k)], [0 yMax], ...
-            'Color', [0.87 0.87 0.87], 'LineWidth', 0.7, ...
+            'Color', config.guide_gray, 'LineWidth', 0.7, ...
             'HandleVisibility', 'off');
+    end
+    for reference_y = config.division_lines(:)'
+        if reference_y >= 0 && reference_y <= yMax
+            line(ax, xlim(ax), [reference_y reference_y], ...
+                'Color', config.division_gray, 'LineStyle', '--', ...
+                'LineWidth', 1, 'HandleVisibility', 'off');
+        end
     end
 
 end
 
-function addAreaLegendLocal(ax, group_names, colors, fontSize, manyPanels)
+function addAreaLegendLocal(ax, group_names, colors, fontSize, manyPanels, axisGray)
     % A single legend belongs to the whole figure, even in by_condition mode.
     % Repeat area names share one legend entry and the same plotted color.
     uniqueNames = {};
@@ -1259,20 +1298,24 @@ function addAreaLegendLocal(ax, group_names, colors, fontSize, manyPanels)
         g = firstIndices(k);
         handles(k) = plot(ax, nan, nan, 'o', ...
             'MarkerSize', 7, 'MarkerFaceColor', colors(g,:), ...
-            'MarkerEdgeColor', colors(g,:), 'LineStyle', 'none');
+            'MarkerEdgeColor', 'none', 'LineStyle', 'none');
     end
 
     oldPosition = ax.Position;
     lgd = legend(ax, handles, uniqueNames, ...
         'Box', 'off', 'Orientation', 'horizontal', ...
-        'FontName', 'Arial', 'FontSize', fontSize, ...
+        'FontName', 'Arial', 'FontSize', fontSize, 'TextColor', axisGray, ...
         'Interpreter', 'none', 'AutoUpdate', 'off');
     lgd.NumColumns = numel(uniqueNames);
     lgd.Units = 'normalized';
+    figure_position = get(ancestor(ax, 'figure'), 'Position'); % inches
+    text_height = 1.5 * fontSize / (72 * figure_position(4));
     if manyPanels
-        lgd.Position = [0.73, 0.975, 0.24, 0.022];
+        legend_height = max(0.022, text_height);
+        lgd.Position = [0.73, 0.99 - legend_height, 0.24, legend_height];
     else
-        lgd.Position = [0.73, 0.930, 0.24, 0.048];
+        legend_height = max(0.048, text_height);
+        lgd.Position = [0.73, 0.98 - legend_height, 0.24, legend_height];
     end
     ax.Position = oldPosition;
 end
@@ -1321,7 +1364,7 @@ end
 function drawSummaryWithPoints(ax, x0, y, plot_style, violin_width, ...
         bar_width, color, point_size, point_alpha, violin_alpha, ...
         bar_alpha, point_jitter_width, show_mean, show_median, ...
-        mean_marker_size, median_marker_size, median_line_width, jitter_seed)
+        mean_marker_size, median_marker_size, median_line_width, jitter_seed, sharedGray)
 
     y = double(y(:));
     y = y(isfinite(y));
@@ -1348,7 +1391,7 @@ function drawSummaryWithPoints(ax, x0, y, plot_style, violin_width, ...
                 end
             end
 
-            point_edge_color = [0.28 0.28 0.28];
+            point_edge_color = sharedGray;
 
         case 'violin'
             if numel(y) >= 2 && range(y) > eps
@@ -1382,7 +1425,7 @@ function drawSummaryWithPoints(ax, x0, y, plot_style, violin_width, ...
 
     scatter(ax, x0 + jitter, y, point_size, ...
         'MarkerFaceColor', color, ...
-        'MarkerEdgeColor', point_edge_color, ...
+        'MarkerEdgeColor', [0.6 0.6 0.6], ...
         'MarkerFaceAlpha', point_alpha, ...
         'MarkerEdgeAlpha', point_alpha, ...
         'HandleVisibility', 'off');
@@ -1390,8 +1433,8 @@ function drawSummaryWithPoints(ax, x0, y, plot_style, violin_width, ...
     if show_mean && ~strcmp(plot_style, 'bar_points')
         plot(ax, x0, meanVal, 'd', ...
             'MarkerSize', mean_marker_size, ...
-            'Color', [0.28 0.28 0.28], ...
-            'MarkerFaceColor', [0.28 0.28 0.28], ...
+            'Color', sharedGray, ...
+            'MarkerFaceColor', sharedGray, ...
             'LineWidth', 0.8, ...
             'HandleVisibility', 'off');
     end
@@ -1400,8 +1443,8 @@ function drawSummaryWithPoints(ax, x0, y, plot_style, violin_width, ...
         if strcmp(plot_style, 'bar_points')
             plot(ax, x0, medianVal, 's', ...
                 'MarkerSize', median_marker_size, ...
-                'Color', [0.28 0.28 0.28], ...
-                'MarkerFaceColor', [0.28 0.28 0.28], ...
+                'Color', color, ...
+                'MarkerFaceColor', sharedGray, ...
                 'LineWidth', 0.8, ...
                 'HandleVisibility', 'off');
         else
@@ -1500,11 +1543,12 @@ function yMax = computeFlexibleYMax(values)
 end
 
 function s = metricLabel(metric_name)
+    % Preserve the wording while keeping 30 pt y labels within each panel.
     switch char(metric_name)
         case 'percentLatents'
-            s = 'Percentage of latents (%)';
+            s = {'Percentage of', 'latents (%)'};
         case 'percentSharedVariance'
-            s = 'Percentage of shared variance explained (%)';
+            s = {'Percentage of shared', 'variance explained (%)'};
         otherwise
             s = metric_name;
     end
