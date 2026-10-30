@@ -1,11 +1,36 @@
 %% posterior_rawvar.m
+% OBSERVED TOTAL EXTENSION (20261029): PosteriorRawVarTotal is appended to
+% the SAME output MAT. Existing PosteriorRawVar/Extra/Noise/Total variables
+% are reused and NEVER rewritten. No existing column order or value changes.
+% Total = mean_t var_trial(seqEst.y,0): actual observed count variance, M-1.
+% Total is NOT the sum Across+Within+Noise, nor All reconstruction variance.
+% For the default residual input, removing each bin's fixed PSTH leaves this
+% across-trial variance unchanged. No posterior uncertainty is added to Total;
+% u0/u1 have the same Total for the same observations/trials/bins.
+% Total stores .raw_var, .normalized_var=raw_var/mean_count, .rate_var=raw_var/dt^2,
+% .normalized_rate_var=normalized_var/dt, their per-bin arrays and group
+% summaries. Normalization is per neuron/condition BEFORE neuron averaging.
+% Run var_stimuli_depended_balance_change.m to plot changes in % of Total.
+% Existing six-category raw/normalized figures and their flags are unchanged.
+%
 % Per-session posterior raw variance, separately for every stimulus condition.
+% RESIDUAL NOISE EXTENSION (20261028): an independent MAT variable
+% PosteriorRawVarNoise is appended; existing PosteriorRawVar AND existing
+% PosteriorRawVarExtra are NOT rewritten, reordered, or recalculated.
+% Noise0 = mean_t var_trial(y - posterior_mean_All, 0), using M-1.
+% Noise1 = Noise0 + mean_{trial,t} diag(C*Vsm*C'), all latents/full covariance.
+% The u0/u1 filename selects BOTH latent and Noise uncertainty consistently.
+% Mean normalization is per neuron/condition; count and rate versions are
+% always saved. Noise is posterior residual variance, NOT fitted model R.
+% Existing six-category single-session figures are retained unchanged.
+% Run Varline_figure_plot.m for Within/Across/Noise or FF/FB/Noise figures.
+%
 % EXTENSION: All latent + normalization by MEAN SPIKE COUNT PER BIN.
 % Both unnormalized and normalized values are always calculated and saved.
 % The existing PosteriorRawVar variable keeps its original FIVE categories,
-% fields and values. On an existing compatible MAT, only the NEW variable
-% PosteriorRawVarExtra is saved with -append; PosteriorRawVar is not rewritten.
-% On a first run, both variables are created in the same usual output MAT.
+% fields and values. On an existing compatible MAT, a missing Extra is added;
+% an existing Extra is reused without writeback. Noise is appended separately.
+% On a first run, all four variables are created in the usual output MAT.
 % Existing original five-category variance is reused, not recalculated.
 %
 % PosteriorRawVarExtra.labels = Across, Within, Feedforward, Feedback,
@@ -101,11 +126,11 @@
 % Figure tags: *_all6_raw_gXX (unnormalized) / *_all6_mc_gXX (normalized).
 % PNG is exported to a temporary short path, then moved to the output folder;
 % print is a fallback if exportgraphics fails. Repeating an identical setting
-% appends/replaces PosteriorRawVarExtra only when the MAT exists.
+% appends missing Noise/Total only; every existing MAT variable is preserved.
 % MAT variable PosteriorRawVar (v2 on a fresh run) stores the
 % model mode, trial IDs, source paths, per-neuron/bin components and summaries.
 % Readers: sum_sessions_latent_compare_var.m and GPL_class_rawvar.m.
-% Defaults use residual data, run 1, and data_condition = 1:16.
+% Defaults use residual data, run 1, and data_condition = [] for Varline.
 
 clc; clear;
 
@@ -116,20 +141,20 @@ dat_file = fullfile(session_dir,'model_data_allruns.mat');
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'demean_count_within_t_and_condition';
 runIdx = 1;
-data_condition = 1:16;  % 1:16 = each-condition models; [] = one all-condition model.
+data_condition = [];  % [] = all-condition model (Varline); 1:16 = each-condition models.
 group_names = {'V1','MT'};  % Display labels in MODEL GROUP order.
 uncertainty_included = 0;  % 0 = mean reconstruction only; 1 = add uncertainty.
 
 save_mat = true;
-make_plots = true;              % master switch for BOTH figure families
+make_plots = false;              % master switch for BOTH figure families
 
 % UNNORMALIZED figures: all three false -> do not draw these figures.
-save_png = true;
+save_png = false;
 save_fig = false;
 save_svg = false;
 
 % MEAN-COUNT-NORMALIZED figures: all three false -> do not draw these figures.
-save_png_normalized = true;
+save_png_normalized = false;
 save_fig_normalized = false;
 save_svg_normalized = false;
 png_dpi = 300;
@@ -191,7 +216,7 @@ if reuse_original
     PosteriorRawVar = S.PosteriorRawVar;
     clear S;
     validateOriginalForExtraLocal(PosteriorRawVar,conditionMap,unitIds,cfg);
-    fprintf('Preserving existing PosteriorRawVar; adding only PosteriorRawVarExtra:\n  %s\n',output_file);
+    fprintf('Preserving existing variables; adding missing Noise/Total:\n  %s\n',output_file);
     cachedExtra = readCachedPosteriorExtraLocal(output_file,PosteriorRawVar,metadata,cfg);
 end
 if ~isempty(cachedExtra)
@@ -273,8 +298,28 @@ end
 PosteriorRawVarExtra = packPosteriorExtraLocal( ...
     ExtraConditions,PosteriorRawVar,metadata,cfg,output_file,reuse_original);
 end
-PosteriorRawVarExtra = addPosteriorRateFieldsLocal(PosteriorRawVarExtra,metadata,cfg);
+% Preserve an existing Extra EXACTLY, including its metadata/timestamps.
+% The new summary can derive rate values from saved count arrays if needed.
+write_extra = isempty(cachedExtra);
+if write_extra
+    PosteriorRawVarExtra = addPosteriorRateFieldsLocal(PosteriorRawVarExtra,metadata,cfg);
+end
 clear cachedExtra;
+PosteriorRawVarNoise = readCachedObservedExtensionLocal( ...
+    output_file,'PosteriorRawVarNoise',PosteriorRawVarExtra,cfg);
+write_noise = isempty(PosteriorRawVarNoise);
+if write_noise
+    PosteriorRawVarNoise = calculatePosteriorNoiseLocal( ...
+        PosteriorRawVar,PosteriorRawVarExtra,metadata,unitIds,metadata_yDims,cfg);
+end
+PosteriorRawVarTotal = readCachedObservedExtensionLocal( ...
+    output_file,'PosteriorRawVarTotal',PosteriorRawVarExtra,cfg);
+write_total = isempty(PosteriorRawVarTotal);
+if write_total
+    PosteriorRawVarTotal = calculatePosteriorTotalLocal( ...
+        PosteriorRawVar,PosteriorRawVarExtra,PosteriorRawVarNoise, ...
+        metadata,unitIds,metadata_yDims,cfg);
+end
 if cfg.save_mat || (cfg.make_plots && (cfg.save_png || cfg.save_fig || cfg.save_svg || ...
         cfg.save_png_normalized || cfg.save_fig_normalized || cfg.save_svg_normalized))
     if ~isfolder(output_dir)
@@ -284,16 +329,28 @@ if cfg.save_mat || (cfg.make_plots && (cfg.save_png || cfg.save_fig || cfg.save_
 end
 if cfg.save_mat
     if reuse_original
-        % Deliberately do NOT include PosteriorRawVar in this append command.
-        % Other existing MAT variables are also preserved.
-        save(output_file,'PosteriorRawVarExtra','-append');
-        fprintf('Appended PosteriorRawVarExtra; original variables preserved:\n  %s\n',output_file);
+        % Save ONLY missing independent variables, never existing fields.
+        appendNames={};
+        if write_extra, appendNames{end+1}='PosteriorRawVarExtra'; end
+        if write_noise, appendNames{end+1}='PosteriorRawVarNoise'; end
+        if write_total, appendNames{end+1}='PosteriorRawVarTotal'; end
+        if ~isempty(appendNames)
+            currentNames=who('-file',output_file);
+            if any(ismember(appendNames,currentNames))
+                error('Output changed during calculation; rerun to reuse new variables safely.');
+            end
+            save(output_file,appendNames{:},'-append');
+            fprintf('Appended %s; existing variables preserved:\n  %s\n',strjoin(appendNames,', '),output_file);
+        else
+            fprintf('All four variables already present; MAT file left untouched:\n  %s\n',output_file);
+        end
     else
         if isfile(output_file)
             error('Output appeared during calculation; rerun to append safely: %s',output_file);
         end
-        save(output_file,'PosteriorRawVar','PosteriorRawVarExtra','-v7.3');
-        fprintf('Saved original five categories and the extension:\n  %s\n',output_file);
+        save(output_file,'PosteriorRawVar','PosteriorRawVarExtra', ...
+            'PosteriorRawVarNoise','PosteriorRawVarTotal','-v7.3');
+        fprintf('Saved latent, All, residual Noise and observed Total results:\n  %s\n',output_file);
     end
 end
 if cfg.make_plots
@@ -314,7 +371,7 @@ if cfg.make_plots
     end
 end
 fprintf(['Done. Original five-category results preserved. All-latent raw variance ', ...
-    'and count/rate normalized and unnormalized results are in PosteriorRawVarExtra.\n']);
+    'is in PosteriorRawVarExtra; Noise and observed Total are in their separate variables.\n']);
 
 
 %% ----------------------------- FUNCTIONS ------------------------------
@@ -1726,7 +1783,7 @@ function X = readCachedPosteriorExtraLocal(filename,P,metadata,cfg)
             end
         end
     end
-    fprintf('Reusing saved six-category count results; adding rate fields without reconstruction.\n');
+    fprintf('Reusing saved six-category results without changing the saved Extra variable.\n');
 end
 
 function X = addPosteriorRateFieldsLocal(X,metadata,cfg)
@@ -1803,4 +1860,440 @@ function dt = dvBinSecondsLocal(meta,context)
             error('variance_units:BinWidth','%s does not match bin_size in seconds in %s.',f{1},context);
         end
     end
+end
+
+
+function Q = calculatePosteriorNoiseLocal(P,X,metadata,ids,yDims,cfg)
+% Expected M-1 sample variance of y-C*x-d, conditional on fixed parameters.
+% For independent trial posteriors, the correction is MEAN trial covariance,
+% not sum/(M-1). Off-diagonal latent covariance is retained. No model R is used.
+    Q = struct();
+    Q.format_version = 'posterior_rawvar_noise_v1';
+    Q.labels = {'Noise'};
+    Q.meta = X.meta;
+    Q.meta.created_on = datestr(now,30);
+    Q.meta.created_by = 'posterior_rawvar.m';
+    Q.meta.code_revision = '20261028_posterior_residual_noise';
+    Q.meta.noise_definition = 'posterior_residual_y_minus_all';
+    Q.meta.residual_method = 'mean_t_var_trial_seqEst_y_minus_posterior_mean_All_Mminus1';
+    Q.meta.uncertainty_method = 'mean_trial_bin_diag_full_C_Vsm_C_transpose';
+    Q.meta.uncertainty_included = cfg.uncertainty_included;
+    Q.meta.original_variable = 'PosteriorRawVar';
+    Q.meta.extra_variable = 'PosteriorRawVarExtra';
+    Q.meta.extra_created_on = X.meta.created_on;
+    Q.meta.bin_size_seconds = dvBinSecondsLocal(metadata,'model_data_allruns');
+    Q.meta.count_unit = 'spikes_per_bin_squared';
+    Q.meta.rate_unit = '(spikes/second)^2';
+    Q.meta.normalized_count_unit = 'spikes_per_bin';
+    Q.meta.normalized_rate_unit = 'spikes/second';
+    Q.meta.rate_variance_definition = 'rate_var = raw_var / bin_size_seconds^2';
+    Q.meta.rate_normalized_definition = 'normalized_rate_var = normalized_var / bin_size_seconds';
+    Q.meta.noise_is_model_R = false;
+    Q.meta.uncertainty_assumption = 'Fixed fitted parameters; independent posterior trials';
+    Q.settings = cfg;
+    Q.condition_ids = X.condition_ids;
+    Q.condition = struct([]);
+    isAll = strcmp(cfg.model_mode,'all_condition');
+    if isAll
+        runDir = fullfile(cfg.session_dir,['FA_Dlag_' cfg.data_content], ...
+            'mat_results',sprintf('run%03d',cfg.runIdx));
+        [B,p,bestFile] = loadPosteriorBaseForExtraLocal(runDir,yDims,ids,[],cfg);
+        cond = trialConditionIdsLocal(B.seqEst,metadata,numel(metadata.conditions_full),bestFile);
+    end
+    for ci = 1:numel(X.condition)
+        E = X.condition(ci); id = E.condition_id;
+        if isAll
+            seq = B.seqEst(cond==id);
+        else
+            runDir = fullfile(cfg.session_dir,sprintf('FA_Dlag_%s_condition%d',cfg.data_content,id), ...
+                'mat_results',sprintf('run%03d',cfg.runIdx));
+            [B,p,bestFile] = loadPosteriorBaseForExtraLocal(runDir,yDims,ids,id,cfg);
+            seq = B.seqEst;
+        end
+        old = P.condition([P.condition.condition_id]==id);
+        validateConditionForExtraLocal(old,seq,p,ids,cfg);
+        if any(trialConditionIdsLocal(seq,metadata,numel(metadata.conditions_full),bestFile)~=id)
+            error('Noise: trial-to-condition mapping disagrees in condition %d.',id);
+        end
+        [residualBin,allBin,reconField] = noiseResidualBinsLocal(seq,p,E.n_bins,id);
+        C = struct();
+        for f = {'condition_id','feature_index','direction_index','direction_value', ...
+                'condition_label','n_trials','n_bins','trial_ids'}
+            C.(f{1}) = E.(f{1});
+        end
+        C.bestmodel_file = bestFile;
+        C.model_mode = cfg.model_mode;
+        C.reconstruction_field = reconField;
+        C.observation_field = 'seqEst.y';
+        groups = cell(1,numel(yDims));
+        for g = 1:numel(yDims)
+            A = E.group(g);
+            rows = sum(yDims(1:g-1))+(1:yDims(g));
+            % A stale model/reconstruction must not be mixed with cached variance.
+            noiseNearLocal(mean(allBin(rows,:),2),A.reconstruction_var(:,6), ...
+                sprintf('saved All reconstruction, condition %d group %d',id,g));
+            if isfield(A,'all_reconstruction_var_by_bin')
+                noiseNearLocal(allBin(rows,:),A.all_reconstruction_var_by_bin, ...
+                    sprintf('saved All per-bin variance, condition %d group %d',id,g));
+            end
+            G = struct('name',A.name,'unit_ids',A.unit_ids,'n_neurons',A.n_neurons);
+            G.residual_var_by_bin = residualBin(rows,:);
+            G.uncertainty_var_by_bin = nan(size(G.residual_var_by_bin));
+            if cfg.uncertainty_included
+                % All's correction is exactly the residual's posterior correction.
+                requireFieldsLocal(A,{'all_uncertainty_var_by_bin'},'saved All uncertainty');
+                U = double(A.all_uncertainty_var_by_bin);
+                assertSizeLocal(U,[numel(rows) E.n_bins],'Noise uncertainty');
+                if any(~isfinite(U(:)) | U(:)<0)
+                    error('Saved All uncertainty is invalid in condition %d group %d.',id,g);
+                end
+                noiseNearLocal(mean(U,2),A.uncertainty_var(:,6),'saved All uncertainty average');
+                G.uncertainty_var_by_bin = U;
+            end
+            G.residual_var = mean(G.residual_var_by_bin,2);
+            G.uncertainty_var = mean(G.uncertainty_var_by_bin,2);
+            G.raw_var_by_bin = G.residual_var_by_bin;
+            G.raw_var = G.residual_var;
+            if cfg.uncertainty_included
+                G.raw_var_by_bin = G.raw_var_by_bin+G.uncertainty_var_by_bin;
+                G.raw_var = G.raw_var+G.uncertainty_var;
+            end
+            G.mean_count = A.mean_count; % exact same neuron/condition denominator
+            G.mean_rate = G.mean_count/Q.meta.bin_size_seconds;
+            G.normalization_valid = isfinite(G.mean_count) & G.mean_count>0;
+            G.normalization_excluded_unit_ids = G.unit_ids(~G.normalization_valid);
+            G.n_valid_mean_count = nnz(G.normalization_valid);
+            G.normalized_var = normalizeByMeanCountLocal(G.raw_var,G.mean_count);
+            G.normalized_residual_var = normalizeByMeanCountLocal(G.residual_var,G.mean_count);
+            G.normalized_uncertainty_var = normalizeByMeanCountLocal(G.uncertainty_var,G.mean_count);
+            countFields = {'raw_var','residual_var','uncertainty_var','raw_var_by_bin', ...
+                'residual_var_by_bin','uncertainty_var_by_bin','normalized_var', ...
+                'normalized_residual_var','normalized_uncertainty_var'};
+            rateFields = {'rate_var','rate_residual_var','rate_uncertainty_var','rate_var_by_bin', ...
+                'rate_residual_var_by_bin','rate_uncertainty_var_by_bin','normalized_rate_var', ...
+                'normalized_rate_residual_var','normalized_rate_uncertainty_var'};
+            for k = 1:numel(countFields)
+                power = 2; if k>=7, power=1; end
+                G.(rateFields{k}) = G.(countFields{k})/Q.meta.bin_size_seconds^power;
+            end
+            % Each summary is computed AFTER per-neuron normalization.
+            names = {'raw','residual','uncertainty','normalized','normalized_residual', ...
+                'normalized_uncertainty','rate','rate_residual','rate_uncertainty', ...
+                'normalized_rate','normalized_rate_residual','normalized_rate_uncertainty'};
+            for k = 1:numel(names)
+                key = names{k};
+                [total,avg,n] = summarizeNormalizedRowsLocal(G.([key '_var']));
+                G.([key '_sum'])=total; G.([key '_mean'])=avg; G.([key '_n_neurons'])=n;
+            end
+            groups{g} = G;
+        end
+        C.group = [groups{:}];
+        if ci==1, Q.condition=C; else, Q.condition(ci)=orderfields(C,Q.condition(1)); end
+        fprintf('  Residual Noise: condition %d, %d trials, u%d (old latent results unchanged).\n', ...
+            id,E.n_trials,cfg.uncertainty_included);
+    end
+    Q.group = repmat(struct('name','','stim_dir',struct([])),1,numel(yDims));
+    for g = 1:numel(yDims)
+        Q.group(g).name = cfg.group_names{g};
+        dirs = cell(1,2);
+        for d = 1:2
+            D = struct('conditionIds',Q.condition_ids(:,d),'n_neurons',nan(8,1), ...
+                'n_trials',nan(8,1),'n_bins',nan(8,1));
+            for k = 1:numel(names)
+                for suffix = {'_sum','_mean','_n_neurons'}
+                    D.([names{k} suffix{1}]) = nan(8,1);
+                end
+            end
+            for ci = 1:numel(Q.condition)
+                E = Q.condition(ci); if E.direction_index~=d, continue; end
+                row=E.feature_index; G=E.group(g);
+                D.n_neurons(row)=G.n_neurons; D.n_trials(row)=E.n_trials; D.n_bins(row)=E.n_bins;
+                for k=1:numel(names)
+                    for suffix={'_sum','_mean','_n_neurons'}
+                        f=[names{k} suffix{1}]; D.(f)(row)=G.(f);
+                    end
+                end
+            end
+            dirs{d}=D;
+        end
+        Q.group(g).stim_dir=[dirs{:}];
+    end
+end
+
+function [V,allV,field,totalV] = noiseResidualBinsLocal(seq,p,T,id)
+% Choose one All representation for every trial. Constant d cancels in each
+% per-bin trial variance, so no-d and C*xsm fallbacks are exactly equivalent.
+    ny=sum(p.yDims); L=size(p.C,2); M=numel(seq);
+    if M<2 || ~isfield(seq,'y'), error('Noise needs seqEst.y and at least two trials.'); end
+    field='';
+    for candidate={'yRecon_use_all','yRecon_use_all_no_d'}
+        f=candidate{1};
+        if isfield(seq,f) && all(arrayfun(@(s) ~isempty(s.(f)),seq))
+            field=f; break;
+        end
+    end
+    if isempty(field) && L>0 && ~isfield(seq,'xsm')
+        error('Noise: condition %d lacks All reconstruction and xsm.',id);
+    end
+    mu=zeros(ny,T); ss=mu; amu=mu; ass=mu;
+    ymu=mu; yss=mu;
+    for r=1:M
+        Y=seq(r).y;
+        assertSizeLocal(Y,[ny T],'Noise observation y');
+        if ~isnumeric(Y) || ~isreal(Y) || any(~isfinite(Y(:)))
+            error('Noise: condition %d trial %d has invalid observation y.',id,r);
+        end
+        if ~isempty(field)
+            H=seq(r).(field);
+        elseif L==0
+            H=zeros(ny,T);
+        else
+            X=seq(r).xsm; assertSizeLocal(X,[L T],'Noise xsm');
+            if ~isnumeric(X) || ~isreal(X) || any(~isfinite(X(:)))
+                error('Noise: invalid xsm in condition %d trial %d.',id,r);
+            end
+            H=double(p.C)*double(X);
+        end
+        assertSizeLocal(H,[ny T],'Noise All reconstruction');
+        if ~isnumeric(H) || ~isreal(H) || any(~isfinite(H(:)))
+            error('Noise: invalid All reconstruction in condition %d trial %d.',id,r);
+        end
+        if nargout>=4
+            Y=double(Y); dy=Y-ymu; ymu=ymu+dy/r; yss=yss+dy.*(Y-ymu);
+        end
+        H=double(H); R=double(Y)-H;
+        delta=R-mu; mu=mu+delta/r; ss=ss+delta.*(R-mu);
+        delta=H-amu; amu=amu+delta/r; ass=ass+delta.*(H-amu);
+    end
+    V=max(ss/(M-1),0); allV=max(ass/(M-1),0);
+    totalV=[]; if nargout>=4, totalV=max(yss/(M-1),0); end
+    if isempty(field), field='computed_C_xsm_no_d'; end
+end
+
+function noiseNearLocal(A,B,label)
+    A=double(A); B=double(B);
+    if ~isequal(size(A),size(B)) || any(~isfinite(A(:))) || any(~isfinite(B(:)))
+        error('Noise: incompatible %s.',label);
+    end
+    if ~isempty(A) && max(abs(A(:)-B(:)))>1e-8*max(1,max(abs(B(:))))
+        error(['Noise does not match %s. The model/reconstruction may have changed ', ...
+            'since the latent variances were saved. Existing results were not modified.'],label);
+    end
+end
+
+function S = readCachedObservedExtensionLocal(file,variable,X,cfg)
+% Never overwrite an existing Noise/Total variable, including its metadata.
+    S=[];
+    if ~isfile(file) || ~ismember(variable,who('-file',file)), return; end
+    loaded=load(file,variable); S=loaded.(variable);
+    isTotal=strcmp(variable,'PosteriorRawVarTotal');
+    if isTotal, kind='total'; else, kind='noise'; end
+    requireFieldsLocal(S,{'format_version','meta','labels','condition_ids','condition','group'},variable);
+    if ~strcmp(S.format_version,['posterior_rawvar_' kind '_v1'])
+        error('Unsupported existing %s; it was not modified.',variable);
+    end
+    requireFieldsLocal(S.meta,{'extra_created_on','model_mode','data_content','runIdx', ...
+        'uncertainty_included','variance_method','variance_normalization'},[variable '.meta']);
+    if ~strcmp(S.meta.extra_created_on,X.meta.created_on) || ...
+            ~strcmp(S.meta.model_mode,cfg.model_mode) || ~strcmp(S.meta.data_content,cfg.data_content) || ...
+            S.meta.runIdx~=cfg.runIdx || ~isequaln(S.condition_ids,X.condition_ids) || ...
+            numel(S.condition)~=numel(X.condition) || ...
+            ~strcmp(S.meta.variance_method,'across_trials_per_bin_mean_over_bins') || ...
+            ~strcmp(S.meta.variance_normalization,'M-1')
+        error('Existing %s does not match the saved latent result; it was not modified.',variable);
+    end
+    if isTotal
+        requireFieldsLocal(S.meta,{'source_uncertainty_included','total_definition'},'Total.meta');
+        if S.meta.uncertainty_included~=0 || ...
+                double(S.meta.source_uncertainty_included)~=double(cfg.uncertainty_included) || ...
+                ~strcmp(S.meta.total_definition,'observed_y_trial_variance') || ~isequal(S.labels,{'Total'})
+            error('Existing Total must be observed variance without posterior uncertainty.');
+        end
+    else
+        if double(S.meta.uncertainty_included)~=double(cfg.uncertainty_included) || ...
+                ~strcmp(S.meta.noise_definition,'posterior_residual_y_minus_all') || ...
+                ~strcmp(S.meta.uncertainty_method,'mean_trial_bin_diag_full_C_Vsm_C_transpose') || ...
+                ~isequal(S.labels,{'Noise'})
+            error('Existing Noise does not match the selected residual/u definition.');
+        end
+    end
+    dt=dvBinSecondsLocal(X.meta,'Extra.meta'); sdt=dvBinSecondsLocal(S.meta,[variable '.meta']);
+    if abs(dt-sdt)>1e-9*dt, error('Existing %s bin width differs from Extra.',variable); end
+    cids=[S.condition.condition_id];
+    if numel(unique(cids))~=numel(cids) || ~isequal(sort(cids),sort([X.condition.condition_id]))
+        error('Existing %s condition records are inconsistent.',variable);
+    end
+    for ci=1:numel(X.condition)
+        E=X.condition(ci); C=S.condition(cids==E.condition_id);
+        for f={'feature_index','direction_index','direction_value','n_trials','n_bins','trial_ids','model_mode'}
+            if ~isequaln(C.(f{1}),E.(f{1})), error('%s has mismatched %s.',variable,f{1}); end
+        end
+        if numel(C.group)~=numel(E.group), error('%s group count differs.',variable); end
+        for g=1:numel(E.group)
+            A=E.group(g); B=C.group(g); N=numel(A.unit_ids);
+            if ~isequal(B.unit_ids,A.unit_ids) || B.n_neurons~=N || ~isequaln(B.mean_count,A.mean_count)
+                error('%s neuron IDs/count/mean-count differ from Extra.',variable);
+            end
+            assertSizeLocal(B.raw_var,[N 1],[variable '.raw_var']);
+            assertSizeLocal(B.raw_var_by_bin,[N E.n_bins],[variable '.raw_var_by_bin']);
+            if any(~isfinite(B.raw_var_by_bin(:)) | B.raw_var_by_bin(:)<0)
+                error('%s contains invalid per-bin variance.',variable);
+            end
+            noiseNearLocal(B.raw_var,mean(B.raw_var_by_bin,2),[variable ' bin average']);
+            if ~isTotal
+                expected=B.residual_var;
+                if cfg.uncertainty_included
+                    noiseNearLocal(B.uncertainty_var,A.uncertainty_var(:,6),'Noise versus All uncertainty');
+                    expected=expected+B.uncertainty_var;
+                end
+                noiseNearLocal(B.raw_var,expected,'cached Noise selected variance');
+            end
+            countExpected=normalizeByMeanCountLocal(B.raw_var,A.mean_count);
+            if ~isequaln(B.normalized_var,countExpected) || ...
+                    ~isequaln(B.rate_var,B.raw_var/dt^2) || ...
+                    ~isequaln(B.normalized_rate_var,countExpected/dt)
+                error('Existing %s count/rate normalization is inconsistent.',variable);
+            end
+        end
+    end
+    fprintf('Reusing %s without rewriting any of its fields.\n',variable);
+end
+
+function O = calculatePosteriorTotalLocal(P,X,Q,metadata,ids,yDims,cfg)
+% Actual observed per-bin M-1 trial variance. NOT All reconstruction and NOT
+% the sum of component variances. Observations y are fixed under the posterior:
+% no uncertainty correction is added, so Total is identical for u0/u1 on the
+% same trials. A fixed per-bin PSTH subtraction leaves this variance unchanged.
+    if ~contains(lower(cfg.data_content),'count')
+        error('Observed count/rate Total requires count-based model observations.');
+    end
+    O=struct('format_version','posterior_rawvar_total_v1','labels',{{'Total'}});
+    O.meta=struct();
+    keep={'data_content','runIdx','stim_tag','group_names','model_mode','mode_tag', ...
+        'data_condition','trial_assignment','variance_method','variance_normalization', ...
+        'conditionShortLabels','dirValues','conditionMap','bin_size','analysis_window', ...
+        'bin_edges','bin_centers','group_probe','group_name','mean_count_source_file', ...
+        'mean_count_source_field','mean_count_source_stim_tag','mean_count_definition', ...
+        'mean_count_unit','mean_count_missing_policy','zero_mean_count_policy', ...
+        'normalization_order','id_definition'};
+    for k=1:numel(keep)
+        if isfield(X.meta,keep{k}), O.meta.(keep{k})=X.meta.(keep{k}); end
+    end
+    dt=dvBinSecondsLocal(metadata,'model_data_allruns');
+    O.meta.created_on=datestr(now,30);
+    O.meta.created_by='posterior_rawvar.m';
+    O.meta.code_revision='20261029_observed_total_append';
+    O.meta.variance_source='observed';
+    O.meta.total_definition='observed_y_trial_variance';
+    O.meta.observation_field='seqEst.y';
+    O.meta.total_method='mean_t_var_trial_seqEst_y_Mminus1';
+    O.meta.uncertainty_included=false;
+    O.meta.source_uncertainty_included=cfg.uncertainty_included;
+    O.meta.uncertainty_method='none_observed_data';
+    O.meta.original_variable='PosteriorRawVar';
+    O.meta.extra_variable='PosteriorRawVarExtra';
+    O.meta.extra_created_on=X.meta.created_on;
+    O.meta.bin_size_seconds=dt;
+    O.meta.count_unit='spikes_per_bin_squared';
+    O.meta.raw_unit='spikes_per_bin_squared';
+    O.meta.rate_unit='(spikes/second)^2';
+    O.meta.normalized_count_unit='spikes_per_bin';
+    O.meta.normalized_rate_unit='spikes/second';
+    O.meta.rate_variance_definition='rate_var = raw_var / bin_size_seconds^2';
+    O.meta.rate_normalized_definition='normalized_rate_var = normalized_var / bin_size_seconds';
+    O.meta.total_is_component_sum=false;
+    O.settings=cfg;
+    O.dimension_names.per_neuron_variance={'neuron','Total'};
+    O.dimension_names.variance_by_bin={'neuron','time_bin'};
+    O.condition_ids=X.condition_ids;
+    conditionRecords=cell(1,numel(X.condition));
+    isAll=strcmp(cfg.model_mode,'all_condition');
+    if isAll
+        runDir=fullfile(cfg.session_dir,['FA_Dlag_' cfg.data_content], ...
+            'mat_results',sprintf('run%03d',cfg.runIdx));
+        [B,p,bestFile]=loadPosteriorBaseForExtraLocal(runDir,yDims,ids,[],cfg);
+        cond=trialConditionIdsLocal(B.seqEst,metadata,numel(metadata.conditions_full),bestFile);
+    end
+    for ci=1:numel(X.condition)
+        E=X.condition(ci); id=E.condition_id;
+        if isAll
+            seq=B.seqEst(cond==id);
+        else
+            runDir=fullfile(cfg.session_dir,sprintf('FA_Dlag_%s_condition%d',cfg.data_content,id), ...
+                'mat_results',sprintf('run%03d',cfg.runIdx));
+            [B,p,bestFile]=loadPosteriorBaseForExtraLocal(runDir,yDims,ids,id,cfg);
+            seq=B.seqEst;
+        end
+        old=P.condition([P.condition.condition_id]==id);
+        validateConditionForExtraLocal(old,seq,p,ids,cfg);
+        if any(trialConditionIdsLocal(seq,metadata,numel(metadata.conditions_full),bestFile)~=id)
+            error('Total: trial-to-condition mapping disagrees in condition %d.',id);
+        end
+        [residualBin,allBin,reconField,totalBin]=noiseResidualBinsLocal(seq,p,E.n_bins,id);
+        Qc=Q.condition([Q.condition.condition_id]==id);
+        C=struct();
+        for f={'condition_id','feature_index','direction_index','direction_value', ...
+                'condition_label','n_trials','n_bins','trial_ids'}
+            C.(f{1})=E.(f{1});
+        end
+        C.bestmodel_file=bestFile; C.model_mode=cfg.model_mode;
+        C.observation_field='seqEst.y'; C.checked_reconstruction_field=reconField;
+        groupRecords=cell(1,numel(yDims));
+        for g=1:numel(yDims)
+            A=E.group(g); rows=sum(yDims(1:g-1))+(1:yDims(g));
+            noiseNearLocal(mean(allBin(rows,:),2),A.reconstruction_var(:,6),'Total source versus saved All');
+            if isfield(A,'all_reconstruction_var_by_bin')
+                noiseNearLocal(allBin(rows,:),A.all_reconstruction_var_by_bin,'Total source versus saved All bins');
+            end
+            noiseNearLocal(residualBin(rows,:),Qc.group(g).residual_var_by_bin,'Total source versus saved Noise');
+            G=struct('name',A.name,'unit_ids',A.unit_ids,'n_neurons',A.n_neurons);
+            G.raw_var_by_bin=totalBin(rows,:);
+            G.raw_var=mean(G.raw_var_by_bin,2);
+            G.mean_count=A.mean_count;
+            G.mean_rate=G.mean_count/dt;
+            G.normalization_valid=isfinite(G.mean_count)&G.mean_count>0;
+            G.normalization_excluded_unit_ids=G.unit_ids(~G.normalization_valid);
+            G.n_valid_mean_count=nnz(G.normalization_valid);
+            G.normalized_var=normalizeByMeanCountLocal(G.raw_var,G.mean_count);
+            G.normalized_var_by_bin=normalizeByMeanCountLocal(G.raw_var_by_bin,G.mean_count);
+            G.rate_var=G.raw_var/dt^2;
+            G.rate_var_by_bin=G.raw_var_by_bin/dt^2;
+            G.normalized_rate_var=G.normalized_var/dt;
+            G.normalized_rate_var_by_bin=G.normalized_var_by_bin/dt;
+            names={'raw','normalized','rate','normalized_rate'};
+            for k=1:numel(names)
+                key=names{k}; [total,avg,n]=summarizeNormalizedRowsLocal(G.([key '_var']));
+                G.([key '_sum'])=total; G.([key '_mean'])=avg; G.([key '_n_neurons'])=n;
+            end
+            groupRecords{g}=G;
+        end
+        C.group=[groupRecords{:}]; conditionRecords{ci}=C;
+        fprintf('  Observed Total: condition %d, %d trials (M-1); no posterior uncertainty added.\n',id,E.n_trials);
+    end
+    O.condition=[conditionRecords{:}];
+    groupRecords=cell(1,numel(yDims));
+    for g=1:numel(yDims)
+        G=struct('name',cfg.group_names{g}); dirs=cell(1,2);
+        for d=1:2
+            D=struct('conditionIds',O.condition_ids(:,d),'n_neurons',nan(8,1), ...
+                'n_trials',nan(8,1),'n_bins',nan(8,1),'n_valid_mean_count',nan(8,1));
+            for k=1:numel(names)
+                for suffix={'_sum','_mean','_n_neurons'}, D.([names{k} suffix{1}])=nan(8,1); end
+            end
+            for ci=1:numel(O.condition)
+                E=O.condition(ci); if E.direction_index~=d, continue; end
+                row=E.feature_index; A=E.group(g);
+                D.n_neurons(row)=A.n_neurons; D.n_trials(row)=E.n_trials; D.n_bins(row)=E.n_bins;
+                D.n_valid_mean_count(row)=A.n_valid_mean_count;
+                for k=1:numel(names)
+                    for suffix={'_sum','_mean','_n_neurons'}
+                        key=[names{k} suffix{1}]; D.(key)(row)=A.(key);
+                    end
+                end
+            end
+            dirs{d}=D;
+        end
+        G.stim_dir=[dirs{:}]; groupRecords{g}=G;
+    end
+    O.group=[groupRecords{:}];
 end
