@@ -1,7 +1,7 @@
 %% sum_GPL_index_by_area.m
 % Pool area-specific GPL selectivity and pattern/component indices across
 % sessions using an explicit model-group/probe/area mapping.
-% Revision: 2026-10-16 (scatter appearance and invalid-ID reporting only)
+% Revision: 2026-11-09 (interactive case-neuron selection and star overlays)
 %
 % Run GPL_analysis_by_area.m first for every session/probe. This script reads
 % the resulting probe-level unit_gpl_results.mat or
@@ -37,6 +37,18 @@
 % Temporary ID-report data are not added to the saved summary MAT. If source
 % ID metadata cannot be verified, report the problem without changing which
 % neurons/sessions enter the numerical analysis or substituting other IDs.
+%
+% Interactive case-neuron selection:
+%   - after a session passes the existing inclusion checks, enter local IDs
+%     separately for each model group, e.g. [13 20]; [] or Enter skips a group;
+%   - IDs match GPL_tuning_case_neuron: original target-model GROUP-local IDs,
+%     verified using target_unit_index and target_unit_ids/used_unit_ids;
+%   - selected OSI, DI, ZP, ZC and PI are printed immediately from saved data;
+%   - selected valid Fisher-Z points retain their original circle and receive
+%     a star overlay. Invalid selections are printed but are not plotted;
+%   - missing IDs or malformed input can be entered again for the same group;
+%   - GPLIndexSummary.highlighted_neurons retains the selections if save_mat
+%     is enabled. This selection never changes the pooled data or statistics.
 
 clc;
 clear;
@@ -70,7 +82,7 @@ save_mat = false;
 save_figure = false;
 
 figure_visible = 'on';             % 'on' or 'off'
-close_after_save = true;
+close_after_save = false;
 
 % One RGB row per model group.
 group_colors = [
@@ -134,6 +146,12 @@ class_markers = {'o', 'o', 'o'};
 % Scatter marker AREA in points squared; reduce/increase this to resize dots.
 class_scatter_size = 12;
 class_scatter_alpha = 0.68;
+
+% Stars are drawn over selected circles on the Zc-versus-Zp scatter only.
+% Marker size is in points (not the points-squared area used by scatter).
+highlight_star_marker_size = 11;
+highlight_star_line_width = 1.6;
+highlight_star_color = [0, 0, 0];
 
 class_boundary_line_style = '--';
 class_boundary_line_width = 1.0;
@@ -272,6 +290,15 @@ validateattributes(class_scatter_size, {'numeric'}, ...
     {'real', 'scalar', 'finite', 'positive'}, mfilename, 'class_scatter_size');
 validateattributes(class_scatter_alpha, {'numeric'}, ...
     {'real', 'scalar', 'finite', '>=', 0, '<=', 1}, mfilename, 'class_scatter_alpha');
+validateattributes(highlight_star_marker_size, {'numeric'}, ...
+    {'real', 'scalar', 'finite', 'positive'}, ...
+    mfilename, 'highlight_star_marker_size');
+validateattributes(highlight_star_line_width, {'numeric'}, ...
+    {'real', 'scalar', 'finite', 'positive'}, ...
+    mfilename, 'highlight_star_line_width');
+validateattributes(highlight_star_color, {'numeric'}, ...
+    {'real', 'finite', 'size', [1, 3], '>=', 0, '<=', 1}, ...
+    mfilename, 'highlight_star_color');
 
 z_axis_limits = validateOptionalAxisLimitsLocal( ...
     z_axis_limits, 'z_axis_limits');
@@ -355,6 +382,7 @@ records = struct([]);
 reference_metadata = struct([]);
 % Keep reporting metadata separate so records and the saved MAT stay intact.
 record_id_reports = struct('model_local_ids', {}, 'mapping_error', {});
+highlighted_neurons = repmat(highlightedNeuronTemplateLocal(), 0, 1);
 
 skipped_sessions = struct( ...
     'session_index', {}, ...
@@ -526,6 +554,12 @@ for si = 1:num_session_candidates
         continue;
     end
 
+    % Ask only after all requested groups have passed the original checks.
+    % Each accepted session is handled here, before moving to the next one.
+    session_highlights = promptSessionHighlightsLocal( ...
+        session_records, session_id_reports, group_names);
+    highlighted_neurons = [highlighted_neurons; session_highlights]; %#ok<AGROW>
+
     if isempty(records)
         records = session_records(:);
         record_id_reports = session_id_reports(:);
@@ -554,6 +588,8 @@ fprintf('\nLoaded %d GPL group record(s) from %d session(s).\n', ...
     numel(records), numel(included_session_indices));
 fprintf('Skipped %d session(s) and %d input file(s).\n', ...
     numel(skipped_sessions), numel(skipped_files));
+fprintf('Selected %d neuron(s); %d can receive a Fisher-Z star overlay.\n', ...
+    numel(highlighted_neurons), sum([highlighted_neurons.scatter_eligible]));
 
 %% ======================= BUILD POOLED VALUES ===========================
 
@@ -630,7 +666,7 @@ GPLIndexSummary = struct();
 
 GPLIndexSummary.meta = struct();
 GPLIndexSummary.meta.program = 'sum_GPL_index_by_area.m';
-GPLIndexSummary.meta.revision = '2026-10-16';
+GPLIndexSummary.meta.revision = '2026-11-09';
 GPLIndexSummary.meta.root_dir = root_dir;
 GPLIndexSummary.meta.gpl_mat_name = gpl_mat_name;
 GPLIndexSummary.meta.subtract_spontaneous = subtract_spontaneous;
@@ -668,7 +704,11 @@ GPLIndexSummary.meta.num_skipped_group_file_records = numel(skipped_files);
 % Retain the old field name for scripts that already read this summary.
 GPLIndexSummary.meta.num_record_files_skipped = numel(skipped_files);
 GPLIndexSummary.meta.session_visual_encoding = ...
-    'none; neurons are pooled directly within each group';
+    'pooled group-colored circles; selected neurons have star overlays';
+GPLIndexSummary.meta.highlight_selection_mode = ...
+    'interactive input for each included session and model group';
+GPLIndexSummary.meta.highlight_id_definition = ...
+    '1-based target-model GROUP-local position, as in GPL_tuning_case_neuron';
 
 GPLIndexSummary.reference_metadata = reference_metadata;
 GPLIndexSummary.session_map = session_map;
@@ -677,6 +717,7 @@ GPLIndexSummary.records = records;
 GPLIndexSummary.skipped_sessions = skipped_sessions;
 GPLIndexSummary.skipped_files = skipped_files;
 GPLIndexSummary.group = group_pool;
+GPLIndexSummary.highlighted_neurons = highlighted_neurons;
 
 GPLIndexSummary.distribution = struct();
 GPLIndexSummary.distribution.OSI = osi_distribution;
@@ -702,6 +743,9 @@ GPLIndexSummary.plot.show_distribution_mean = ...
     show_distribution_mean;
 GPLIndexSummary.plot.show_pattern_index_neuron_count = ...
     show_pattern_index_neuron_count;
+GPLIndexSummary.plot.highlight_star_marker_size = highlight_star_marker_size;
+GPLIndexSummary.plot.highlight_star_line_width = highlight_star_line_width;
+GPLIndexSummary.plot.highlight_star_color = highlight_star_color;
 
 mat_file = fullfile(root_dir, [out_base, '_summary.mat']);
 
@@ -782,6 +826,8 @@ figures(2) = plotMultiGroupDistributionLocal( ...
     font_name, axis_font_size, legend_font_size, axis_line_width);
 
 for g = 1:nGroups
+    group_highlights = highlighted_neurons( ...
+        [highlighted_neurons.group_index] == g);
     figures(2 + g) = plotOneGroupPatternComponentLocal( ...
         group_pool(g), ...
         group_display_names{g}, ...
@@ -797,7 +843,9 @@ for g = 1:nGroups
         class_boundary_line_style, class_boundary_line_width, ...
         pi_bar_width, pi_bar_alpha, ...
         show_pattern_index_neuron_count, ...
-        font_name, axis_font_size, axis_line_width);
+        font_name, axis_font_size, axis_line_width, ...
+        group_highlights, highlight_star_marker_size, ...
+        highlight_star_line_width, highlight_star_color);
 end
 
 if save_figure
@@ -1123,8 +1171,10 @@ function [records, metadata, id_reports] = readOneGPLProbeFileLocal( ...
             group_index, expected_group_names{group_index}, ...
             expected_probe_id, expected_baseline_subtracted);
 
-        % Read-only diagnostics: this never modifies this_record/metadata.
-        id_reports(local_idx, 1) = makeInvalidIdReportLocal(G, this_record, input_file);
+        % Map every row, including groups without invalid neurons, so the
+        % interactive selector uses exactly the original target-model IDs.
+        id_reports(local_idx, 1) = makeModelLocalIdReportLocal( ...
+            G, this_record, input_file);
 
         if isempty(records)
             records = this_record;
@@ -1316,13 +1366,10 @@ function requireFieldsLocal(S, required_fields, structure_name, input_file)
     end
 end
 
-function report = makeInvalidIdReportLocal(G, rec, input_file)
-% Keep diagnostics separate from rec, metadata, pooled values and MAT fields.
+function report = makeModelLocalIdReportLocal(G, rec, input_file)
+% Keep verified local-ID mapping separate from numerical analysis records.
 
     report = struct('model_local_ids', zeros(0, 1), 'mapping_error', '');
-    if ~any(~isfinite(rec.OSI) | ~isfinite(rec.DI) | rec.is_invalid)
-        return;
-    end
 
     try
         requireFieldsLocal(G, {'target_unit_ids'}, 'gpl_results group', input_file);
@@ -1354,6 +1401,171 @@ function report = makeInvalidIdReportLocal(G, rec, input_file)
         % Failure of a diagnostic must not change the original analysis pool.
         % Never print sorting IDs or compact GPL row numbers as model IDs.
         report.mapping_error = ME.message;
+    end
+end
+
+function neuron = highlightedNeuronTemplateLocal()
+% One entry keeps the saved GPL values and the identity used for selection.
+
+    neuron = struct( ...
+        'session_index', [], ...
+        'session_label', '', ...
+        'session_name', '', ...
+        'group_index', [], ...
+        'group_name', '', ...
+        'model_local_id', [], ...
+        'gpl_row', [], ...
+        'input_file', '', ...
+        'OSI', NaN, ...
+        'DI', NaN, ...
+        'Zp', NaN, ...
+        'Zc', NaN, ...
+        'PI', NaN, ...
+        'class_label', '', ...
+        'scatter_eligible', false);
+end
+
+function selected = promptSessionHighlightsLocal( ...
+        session_records, session_id_reports, group_names)
+% Ask once per group of an accepted session; bad input retries that group.
+
+    selected = repmat(highlightedNeuronTemplateLocal(), 0, 1);
+    if numel(session_records) ~= numel(session_id_reports)
+        error('Internal mismatch between session records and local-ID reports.');
+    end
+    if isempty(session_records)
+        return;
+    end
+
+    fprintf('\nHighlight selection: %s (%s)\n', ...
+        session_records(1).session_name, session_records(1).session_label);
+    fprintf(['  Use the same local IDs as GPL_tuning_case_neuron. ', ...
+        'Enter [13 20], a single ID, or [] / Enter for none.\n']);
+
+    for g = 1:numel(group_names)
+        record_match = find([session_records.group_index] == g);
+        if numel(record_match) ~= 1
+            error('Expected exactly one accepted session record for Group %d.', g);
+        end
+        rec = session_records(record_match);
+        report = session_id_reports(record_match);
+
+        if ~isempty(report.mapping_error) || ...
+                numel(report.model_local_ids) ~= rec.n_neurons
+            fprintf(2, ['  Group %d (%s): highlighting unavailable because ', ...
+                'the original model-local ID mapping could not be verified.\n'], ...
+                g, group_names{g});
+            if ~isempty(report.mapping_error)
+                fprintf(2, '    Reason: %s\n', report.mapping_error);
+            end
+            fprintf(2, '    Source: %s\n', rec.input_file);
+            continue;
+        end
+
+        prompt = sprintf( ...
+            '  Group %d (%s), local IDs to highlight ([] = none): ', ...
+            g, group_names{g});
+
+        while true
+            raw_input = input(prompt, 's');
+            [requested_ids, input_error] = parseHighlightIdsLocal(raw_input);
+            if ~isempty(input_error)
+                fprintf(2, '    %s Please enter this group again.\n', input_error);
+                continue;
+            end
+            if isempty(requested_ids)
+                fprintf('    Group %d (%s): no neurons selected.\n', ...
+                    g, group_names{g});
+                break;
+            end
+
+            [found, rows] = ismember(requested_ids, report.model_local_ids);
+            if any(~found)
+                fprintf(2, ['    %s | Group %d (%s): local IDs %s have no ', ...
+                    'saved GPL rows.\n'], rec.session_name, g, ...
+                    group_names{g}, mat2str(requested_ids(~found)));
+                fprintf(2, ['    Enter the complete ID list for this group ', ...
+                    'again, or [] to skip.\n']);
+                continue;
+            end
+
+            for k = 1:numel(requested_ids)
+                row = rows(k);
+                neuron = highlightedNeuronTemplateLocal();
+                neuron.session_index = rec.session_index;
+                neuron.session_label = rec.session_label;
+                neuron.session_name = rec.session_name;
+                neuron.group_index = rec.group_index;
+                neuron.group_name = rec.group_name;
+                neuron.model_local_id = requested_ids(k);
+                neuron.gpl_row = row;
+                neuron.input_file = rec.input_file;
+                neuron.OSI = rec.OSI(row);
+                neuron.DI = rec.DI(row);
+                neuron.Zp = rec.Zp(row);
+                neuron.Zc = rec.Zc(row);
+                neuron.PI = rec.PI(row);
+                neuron.class_label = char(rec.class_label(row));
+                neuron.scatter_eligible = ...
+                    (rec.is_pattern(row) || rec.is_component(row) || ...
+                    rec.is_unclassified(row)) && ...
+                    isfinite(rec.Zp(row)) && isfinite(rec.Zc(row));
+                selected(end + 1, 1) = neuron; %#ok<AGROW>
+
+                fprintf('    %s | Group %d (%s) | local ID %d\n', ...
+                    neuron.session_name, neuron.group_index, ...
+                    neuron.group_name, neuron.model_local_id);
+                fprintf(['      OSI=%.8g  DI=%.8g  ZP=%.8g  ', ...
+                    'ZC=%.8g  PI=%.8g\n'], ...
+                    neuron.OSI, neuron.DI, neuron.Zp, neuron.Zc, neuron.PI);
+                if neuron.scatter_eligible
+                    fprintf('      Class: %s | star overlay selected.\n', ...
+                        neuron.class_label);
+                else
+                    fprintf(2, ['      Invalid GPL classification or ', ...
+                        'nonfinite ZP/ZC: values reported; no star plotted.\n']);
+                end
+            end
+            break;
+        end
+    end
+end
+
+function [ids, message] = parseHighlightIdsLocal(raw_input)
+% Read plain positive integer lists without evaluating MATLAB expressions.
+
+    ids = zeros(1, 0);
+    message = '';
+    value = strtrim(char(raw_input));
+    if isempty(value)
+        return;
+    end
+    if value(1) == '[' || value(end) == ']'
+        if value(1) ~= '[' || value(end) ~= ']'
+            message = 'ID lists must have both [ and ], or neither.';
+            return;
+        end
+        value = strtrim(value(2:end-1));
+    end
+    if isempty(value)
+        return;
+    end
+    if isempty(regexp(value, '^[0-9]+([\s,;]+[0-9]+)*$', 'once'))
+        message = 'Use positive integer IDs such as [13 20], or [].';
+        return;
+    end
+
+    tokens = regexp(value, '[0-9]+', 'match');
+    ids = cellfun(@str2double, tokens);
+    if any(~isfinite(ids)) || any(ids < 1) || ...
+            any(ids ~= round(ids)) || any(ids > flintmax)
+        ids = zeros(1, 0);
+        message = 'IDs must be finite positive integers within numeric precision.';
+        return;
+    end
+    if numel(unique(ids)) ~= numel(ids)
+        ids = zeros(1, 0);
+        message = 'Each ID should appear only once in the group input.';
     end
 end
 
@@ -2111,7 +2323,8 @@ function fig = plotOneGroupPatternComponentLocal( ...
         boundary_line_style, boundary_line_width, ...
         pi_bar_width, pi_bar_alpha, ...
         show_pi_neuron_count, ...
-        font_name, axis_font_size, axis_line_width)
+        font_name, axis_font_size, axis_line_width, ...
+        highlighted_neurons, star_marker_size, star_line_width, star_color)
 
     fig = figure( ...
         'Name', sprintf('%s GPL pattern/component summary', group_name), ...
@@ -2138,6 +2351,10 @@ function fig = plotOneGroupPatternComponentLocal( ...
     plotZClassificationBoundariesLocal( ...
         ax_scatter, z_limits, z_threshold, ...
         boundary_line_style, boundary_line_width);
+
+    % Draw last so the stars remain above both the circles and boundaries.
+    plotHighlightedNeuronsLocal(ax_scatter, highlighted_neurons, ...
+        star_marker_size, star_line_width, star_color);
 
     xlim(ax_scatter, z_limits);
     ylim(ax_scatter, z_limits);
@@ -2189,6 +2406,30 @@ function fig = plotOneGroupPatternComponentLocal( ...
 
     cleanAxisLocal(ax_pi, font_name, axis_font_size, axis_line_width);
     set(findall(fig, '-property', 'FontName'), 'FontName', font_name);
+end
+
+function plotHighlightedNeuronsLocal( ...
+        ax, highlighted_neurons, marker_size, line_width, color)
+% The selector already resolved session/group-local IDs to exact GPL rows.
+
+    if isempty(highlighted_neurons)
+        return;
+    end
+    selected = highlighted_neurons([highlighted_neurons.scatter_eligible]);
+    if isempty(selected)
+        return;
+    end
+
+    plot(ax, [selected.Zc], [selected.Zp], ...
+        'LineStyle', 'none', ...
+        'Marker', '*', ...
+        'MarkerSize', marker_size, ...
+        'LineWidth', line_width, ...
+        'Color', color, ...
+        'Clipping', 'on', ...
+        'HandleVisibility', 'off', ...
+        'Tag', 'GPLHighlightedNeurons', ...
+        'UserData', selected);
 end
 
 function plotMeanArrowLocal( ...
