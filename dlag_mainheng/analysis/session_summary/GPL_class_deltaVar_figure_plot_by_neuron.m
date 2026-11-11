@@ -3,6 +3,8 @@
 % poster_show_inset controls the optional full-range inset independently of
 % the main-axis zoom. true preserves every existing output filename;
 % false adds _noInset to all saved FIG/SVG/PNG/MAT output bases.
+% Horizontal area/source/cell-class spacing and axis padding are adjustable
+% below. A minimum x-axis span keeps spacing edits visible on the canvas.
 % 2026-10-23: optional All latent figure and none/mean_count input selection.
 % Existing raw/Z analyses use the selected metric. All is a separate raw-only
 % branch and NEVER enters the five-category session-area Z reference pool.
@@ -18,7 +20,23 @@
 %        Run posterior_rawvar.m with matching mode/source/u0 or u1 first.
 % GPL labels: grouped unit_gpl_results_sponsub.mat files under Kilosort folders.
 % Supported: each_condition + model; each_condition/all_condition + posterior.
-% No independent noise or percentage variance. No reconstruction/refit here.
+% No independent-noise plots. No reconstruction/refit here.
+% variance_denominator: 'none' preserves the original variance/mean-response
+% and count/rate options. 'shared'/'total' select POSTERIOR percentages and
+% override variance_normalization; count/rate cancels in these ratios.
+% Each neuron/condition/direction uses 100 * V_component / V_denominator:
+% shared = joint All-latent variance (never Across + Within); total = observed
+% trial variance in PosteriorRawVarTotal (no posterior uncertainty added).
+% Shared uses matching u0/u1 in numerator and denominator. Total uses the
+% selected u0/u1 numerator and the observed denominator from that same file.
+% Ratios are formed BEFORE direction means, Z baselines and differences.
+% Z uses the same selected-neuron/five-category pool, now filled with ratios.
+% Zero denominator gives NaN; percentages are not clipped to [0,100].
+% 'raw' in percentage mode means non-Z percentages; differences are pp.
+% All/shared is exactly 100 when defined, so its feature deltas are zero.
+% The All-figure switch still applies and All never enters the Z pool.
+% Each/all-condition posterior are supported; model variance uses 'none'.
+% Percentage filenames include shared_pct/total_pct; none keeps old names.
 % A model neuron is identified by SESSION + MODEL GROUP + saved unit ID.
 % All 16 conditions and the same ordered neuron IDs are required per session.
 % The five variance categories are Across, Within, Feedforward, Feedback,
@@ -28,6 +46,10 @@
 % First standardize the original 16-condition variances, THEN equally average
 % the two directions. Raw direction variances are also equally averaged.
 % Stimulus matches: G-P, Small-Large, Low-High. Balances: Across-Within, FF-FB.
+% Additional MT-only balance: Feedforward-Within, for P/C/U, raw and Z.
+% Uses the existing per-neuron variances and unchanged session-area Z pool.
+% Existing two-column balance matrices/labels are retained; the added panel
+% data are saved separately in mt_ff_within_balance and poster_statistics.
 % NaN/Inf are excluded from the Z reference; an undefined Z baseline yields
 % NaN Z values while preserving raw observations. Finite input var is required.
 % The saved MAT retains direction arrays, neuron/session IDs, exact mean/SD,
@@ -56,7 +78,11 @@ variance_unit = 'count'; % 'count' or 'rate'; metadata bin_size is in SECONDS
 % The existing normalization selector 'mean_count' means mean RESPONSE:
 % count -> Var(count)/mean(count); rate -> Var(rate)/mean(rate).
 % The rate scales are 1/dt^2 (unnormalized) and 1/dt (normalized).
-variance_normalization = 'mean_count'; % 'none' or 'mean_count' (variance / mean spikes per bin)
+variance_normalization = 'none'; % 'none' or 'mean_count' (variance / mean spikes per bin)
+variance_denominator = 'shared'; % 'none' (original), 'shared' (All), or 'total' (observed)
+% shared/total: posterior only; ignore variance_normalization and count/rate.
+% Read unnormalized count variances in matching units, then compute percent.
+% Require updated PosteriorRawVarExtra; total also requires PosteriorRawVarTotal.
 % 'mean_count' is POSTERIOR ONLY. For model variance keep 'none'; model
 % normalization is not implemented yet. Select saved u0/u1 as above.
 analyze_all_latent_feature_effects = true; % separate 3-row All figure; no All Z
@@ -75,10 +101,10 @@ neuron_population = 'all_neurons'; % 'all_neurons' or 'pcu_neurons'
 % Both modes retain the same figures and legends with actual neuron counts.
 
 save_mat = false;
-save_fig = true;
+save_fig = false;
 save_svg = false;
 save_png = false;
-close_after_save = true;
+close_after_save = false;
 figure_visible = 'on'; % 'on' or 'off'
 png_dpi = 300;
 print_full_error_report = false;
@@ -87,7 +113,7 @@ print_full_error_report = false;
 poster_area_colors = [0.0000, 0.4470, 0.7410; ... % V1
                       0.8500, 0.3250, 0.0980];   % MT
 poster_outlier_mode = 'zoom_inset'; % 'zoom_inset' or 'full_range'
-poster_show_inset = true; % true: original names; false: hide inset, add _noInset
+poster_show_inset = false; % true: original names; false: hide inset, add _noInset
 % This switch does not change the main y limits, data, or statistical tests.
 % With true, an inset is still drawn only when the original zoom needs it.
 poster_central_percentile = 95;   % central percentile of |delta|
@@ -95,6 +121,16 @@ poster_point_size = 9;
 poster_point_alpha = 0.45;
 poster_point_jitter_width = 0.12;
 poster_violin_width = 0.25;
+% Horizontal distances use the same x units as violin_width (HALF width).
+% Smaller spacing brings the corresponding violin centers closer together.
+poster_area_spacing = 0.6;   % V1 versus MT within the same latent source
+poster_source_spacing = 1.5; % centers of Within/Across or FF/FB source groups
+poster_class_spacing = 0.9;  % adjacent Pattern/Component/Unclassified centers
+poster_x_padding = 0.3;    % minimum margin outside the outermost centers
+poster_x_min_span = 0;    % minimum full x range; 0 = automatically fit data
+% A positive min_span prevents auto-fit from stretching compact groups back
+% across the entire axis; it expands only if needed to fit centers + padding.
+% Original layout: area=1, source=3.3, class=2.3, padding=0.65, min_span=0.
 poster_violin_alpha = 0.18;
 poster_violin_point_spread_gain = 1.3;
 % Larger gain spreads dots at every density; raise violin_width if the
@@ -107,8 +143,8 @@ poster_significance_alpha = 0.05;
 
 font_name = 'Arial';
 axis_font_size = 30; % points; also used by labels, titles, legends and P values
-figure_width = 2200;
-figure_height = 1000;
+figure_width = 450;
+figure_height = 900;
 
 %% ==================== FIXED ANALYSIS DEFINITIONS ======================
 
@@ -148,9 +184,8 @@ assertStringOptionLocal(var_split_mode,{'by_three_features'},'var_split_mode');
 variance_config = neuronVarianceConfigLocal(data_content,runIdx,model_mode, ...
     variance_source,uncertainty_included,DSL_filter,DSL_threshold, ...
     group_names,neuron_population);
-variance_config = dvExtraConfigLocal(variance_config,variance_normalization, ...
-    analyze_all_latent_feature_effects);
-variance_config = dvUnitConfigLocal(variance_config,variance_unit);
+variance_config = dvDenominatorConfigLocal(variance_config,variance_denominator, ...
+    variance_normalization,variance_unit,analyze_all_latent_feature_effects);
 variance_config.file_tag = sprintf('%s_%s_%s_a%d',variance_config.file_tag, ...
     variance_config.normalization_tag,variance_config.unit_tag, ...
     variance_config.analyze_all_latent_feature_effects);
@@ -207,6 +242,10 @@ poster_config = struct( ...
     'mean_differnet_conditions', logical(mean_differnet_conditions), ...
     'outlier_mode', poster_outlier_mode, ...
     'show_inset', logical(poster_show_inset), ...
+    'area_spacing', poster_area_spacing, ...
+    'source_spacing', poster_source_spacing, ...
+    'class_spacing', poster_class_spacing, ...
+    'x_padding', poster_x_padding, 'x_min_span', poster_x_min_span, ...
     'central_percentile', poster_central_percentile, ...
     'point_size', poster_point_size, ...
     'point_alpha', poster_point_alpha, ...
@@ -224,10 +263,12 @@ poster_config = struct( ...
     'font_name', font_name, 'axis_font_size', axis_font_size, ...
     'figure_width', figure_width, 'figure_height', figure_height, ...
     'figure_visible', figure_visible);
+validatePosterSpacingLocal(poster_config, numel(group_names));
 
 poster_config.variance_normalization = variance_config.variance_normalization;
 poster_config.variance_unit = variance_config.variance_unit;
 poster_config.normalization_denominator = variance_config.normalization_denominator;
+poster_config.variance_denominator = variance_config.variance_denominator;
 model_tag = makeModelTagLocal(model_mode);
 output_prefix = ['GPLNdV_' variance_config.file_tag];
 output_base = sprintf('%s_%s_%s_p%g_vw%g_jw%g_vg%g', ...
@@ -243,6 +284,11 @@ fprintf('Z-score: Var first, differences second; separate for each session-area.
 fprintf('Feature and z-score neuron population: %s\n', neuron_population);
 fprintf('Variance source: %s | uncertainty: %d | Z baseline uses all 16 conditions before direction mean.\n',variance_config.variance_source,variance_config.uncertainty_included);
 fprintf('Figures: raw and z-scored latent/feature deltas; violin only.\n');
+if ~strcmp(variance_config.variance_denominator,'none')
+    fprintf(['Metric: percent of %s; variance_normalization and count/rate ', ...
+        'are ignored. Ratios precede direction means and Z; raw deltas are pp.\n'], ...
+        variance_config.variance_denominator);
+end
 fprintf('Feature effects: source, then V1/MT; colors represent area.\n');
 fprintf('Output base: %s\n', output_base);
 
@@ -395,6 +441,39 @@ for g = 1:numel(group_names)
     end
 end
 
+%% =================== MT: FEEDFORWARD MINUS WITHIN =======================
+% Same eight-condition neuron means, statistics and plot style as above.
+% Keep this supplemental contrast separate from the original delta matrices.
+mt_group_idx = find(strcmp(group_names, 'MT'));
+ff_within_indices = [find(strcmp(var_field_names, 'use_feedforward')), ...
+    find(strcmp(var_field_names, 'use_within'))];
+MultiSessionGPLClassDeltaVarNeuron.mt_ff_within_balance = struct();
+for vm = 1:numel(plot_value_modes)
+    value_mode = plot_value_modes{vm};
+    P = buildPosterLatentDeltaDataLocal( ...
+        MultiSessionGPLClassDeltaVarNeuron.pooled(mt_group_idx), ...
+        stim_types, class_names, class_labels, ...
+        ff_within_indices, 'ff_vs_wit', value_mode);
+    P = posterComputeTestsLocal(P, 'both', true, ...
+        poster_significance_alpha);
+    fig = plotPosterDeltaLocal(P, poster_config, ...
+        poster_group_colors(mt_group_idx,:), group_names{mt_group_idx});
+    figure_base = sprintf('%s_%s_ffWit_%s', ...
+        output_base, group_file_tags{mt_group_idx}, value_mode);
+    poster_tests(end + 1) = posterTestRecordLocal( ...
+        figure_base, 'latent_balance', group_names(mt_group_idx), ...
+        value_mode, P); %#ok<SAGROW>
+    MultiSessionGPLClassDeltaVarNeuron.mt_ff_within_balance.(value_mode) = P;
+    savePosterOutputLocal(fig, output_dir, figure_base, ...
+        save_fig, save_svg, save_png, png_dpi, close_after_save);
+end
+MultiSessionGPLClassDeltaVarNeuron.notes.mt_ff_within_balance = [ ...
+    'MT only: Feedforward Var minus Within Var for each neuron/condition, ', ...
+    'then finite mean over the same eight conditions as the original ', ...
+    'balance figures. Raw and Z panels use the original direction means ', ...
+    'and unchanged session-area Z baseline. P/C/U remain separate. ', ...
+    'Panel data retain condition values, unit IDs and session indices.'];
+
 %% ====== COMBINED-AREA FEATURE EFFECTS: SELECTED NEURON POPULATION ======
 
 source_families = {[2, 1], [3, 4]}; % Within/Across; FF/FB
@@ -462,6 +541,7 @@ MultiSessionGPLClassDeltaVarNeuron.meta.variance_source = variance_config.varian
 MultiSessionGPLClassDeltaVarNeuron.meta.variance_normalization = variance_config.variance_normalization;
 MultiSessionGPLClassDeltaVarNeuron.meta.variance_unit = variance_config.variance_unit;
 MultiSessionGPLClassDeltaVarNeuron.meta.normalization_denominator = variance_config.normalization_denominator;
+MultiSessionGPLClassDeltaVarNeuron.meta.variance_denominator = variance_config.variance_denominator;
 MultiSessionGPLClassDeltaVarNeuron.meta.analyze_all_latent_feature_effects = ...
     variance_config.analyze_all_latent_feature_effects;
 MultiSessionGPLClassDeltaVarNeuron.notes.response_normalization = ...
@@ -485,6 +565,54 @@ MultiSessionGPLClassDeltaVarNeuron.dimension_names.direction_var = ...
 MultiSessionGPLClassDeltaVarNeuron.dimension_names.direction_zvar = ...
     MultiSessionGPLClassDeltaVarNeuron.dimension_names.direction_var;
 MultiSessionGPLClassDeltaVarNeuron.notes.poster_statistics = 'Two-sided signrank vs zero; Kruskal-Wallis and Holm ranksum class pairs.';
+
+if ~strcmp(variance_config.variance_denominator,'none')
+    MultiSessionGPLClassDeltaVarNeuron.meta.value_unit = 'percent';
+    MultiSessionGPLClassDeltaVarNeuron.meta.raw_delta_unit = 'percentage_points';
+    MultiSessionGPLClassDeltaVarNeuron.notes.response_normalization = [ ...
+        '100 * component variance / ', variance_config.normalization_denominator, ...
+        ', separately for every neuron/condition/direction BEFORE all averaging. ', ...
+        'variance_normalization and count/rate are ignored; ratios use matching count units.'];
+    MultiSessionGPLClassDeltaVarNeuron.notes.zscore_definition = [ ...
+        'Z-score the condition-direction percentages within each session-area: ', ...
+        'selected neurons x all 16 condition-direction combinations x the ', ...
+        'same five categories. Then average directions and form differences. ', ...
+        'All and Total are denominators, not additional Z-reference entries.'];
+    MultiSessionGPLClassDeltaVarNeuron.notes.direction_averaging = ...
+        'Equal mean of two condition-direction percentages; both directions required.';
+    MultiSessionGPLClassDeltaVarNeuron.notes.value_figures = ...
+        'raw = percentage-point differences; zscore = differences of Z-scored percentages.';
+    MultiSessionGPLClassDeltaVarNeuron.notes.delta_definition = [ ...
+        'acr_vs_wit = Across percentage - Within percentage; ', ...
+        'ff_vs_fb = Feedforward percentage - Feedback percentage.'];
+    MultiSessionGPLClassDeltaVarNeuron.notes.zscore_zero_interpretation = [ ...
+        'Both terms use the same session-area percentage mean/SD. Their ', ...
+        'common mean cancels; zero Z difference means equal percentages.'];
+    MultiSessionGPLClassDeltaVarNeuron.notes.feature_delta_zscore_definition = ...
+        'Use the common session-area percentage mean/SD before each matched stimulus subtraction.';
+    MultiSessionGPLClassDeltaVarNeuron.notes.mt_ff_within_balance = [ ...
+        'MT: Feedforward percentage minus Within percentage, then finite mean ', ...
+        'over eight conditions. Z uses the same session-area percentage baseline.'];
+    for vm=1:numel(plot_value_modes)
+        MultiSessionGPLClassDeltaVarNeuron.mt_ff_within_balance.(plot_value_modes{vm}).balance_definition = ...
+            'Feedforward percentage - Within percentage (or their common-baseline Z scores)';
+    end
+    if variance_config.analyze_all_latent_feature_effects
+        MultiSessionGPLClassDeltaVarNeuron.all_latent_feature.variance_denominator = ...
+            variance_config.variance_denominator;
+        MultiSessionGPLClassDeltaVarNeuron.all_latent_feature.value_unit = 'percentage_points';
+    end
+    MultiSessionGPLClassDeltaVarNeuron.notes.denominator = [ ...
+        'shared = joint All-latent posterior variance with matching u0/u1; ', ...
+        'total = observed trial variance without posterior uncertainty. ', ...
+        'Denominators of zero produce NaN; ratios are never clipped.'];
+    MultiSessionGPLClassDeltaVarNeuron.notes.saved_metric_fields = [ ...
+        'Existing raw_var/direction_var fields hold the selected percentages. ', ...
+        'session_data.group.direction_original_var, direction_original_all_var ', ...
+        'and direction_denominator_var retain source count variances.'];
+    MultiSessionGPLClassDeltaVarNeuron.dimension_names.direction_denominator_var = ...
+        {'neuron','feature_combination','direction'};
+end
 
 if save_mat
     mat_file = fullfile(output_dir, [output_base, '.mat']);
@@ -541,6 +669,53 @@ function validatePosterOptionsLocal( ...
     end
 end
 
+function validatePosterSpacingLocal(config, n_areas)
+    fields = {'area_spacing', 'source_spacing', 'class_spacing', 'x_padding'};
+    for k = 1:numel(fields)
+        validateattributes(config.(fields{k}), {'numeric'}, ...
+            {'real', 'scalar', 'finite', 'positive'}, ...
+            mfilename, ['poster_', fields{k}]);
+    end
+    validateattributes(config.x_min_span, {'numeric'}, ...
+        {'real', 'scalar', 'finite', 'nonnegative'}, ...
+        mfilename, 'poster_x_min_span');
+    if config.source_spacing <= (n_areas - 1) * config.area_spacing
+        error(['poster_source_spacing must exceed the center span of one ', ...
+            'area group: (number of areas - 1) * poster_area_spacing.']);
+    end
+    if config.x_padding < config.violin_width
+        error('poster_x_padding must be at least poster_violin_width.');
+    end
+end
+
+function [x, centers, separators, xlimits] = posterXLayoutLocal( ...
+    n_outer, n_inner, combined_areas, config)
+% Source/class distances are measured between group centers. Area spacing
+% controls the inner positions independently. Both axes reuse this layout.
+    if combined_areas
+        outer_spacing = config.source_spacing;
+    else
+        outer_spacing = config.class_spacing;
+    end
+    x = nan(n_outer, n_inner);
+    centers = nan(1, n_outer);
+    separators = nan(1, max(n_outer - 1, 0));
+    for i = 1:n_outer
+        x(i, :) = 1 + (i - 1) * outer_spacing + ...
+            (0:(n_inner - 1)) * config.area_spacing;
+        centers(i) = mean(x(i, :));
+        if i > 1
+            separators(i - 1) = ...
+                (x(i - 1, end) + x(i, 1)) / 2;
+        end
+    end
+    xlimits = [min(x(:)) - config.x_padding, ...
+        max(x(:)) + config.x_padding];
+    if diff(xlimits) < config.x_min_span
+        xlimits = mean(xlimits) + [-0.5, 0.5] * config.x_min_span;
+    end
+end
+
 function colors = resolvePosterAreaColorsLocal(group_names, area_colors)
     seen_areas = {};
     colors = zeros(numel(group_names), 3);
@@ -567,17 +742,22 @@ function P = buildPosterLatentDeltaDataLocal( ...
     pooled_group, stim_types, class_names, class_labels, ...
     delta_idx, delta_name, value_mode)
 
+    source_difference = strcmp(delta_name, 'ff_vs_wit');
     if strcmp(value_mode, 'raw')
         matrix_field = 'raw_delta_matrix';
         prefix = '\Delta Var';
+        if source_difference, matrix_field = 'raw_var_matrix'; end
     else
         matrix_field = 'z_delta_matrix';
         prefix = '\Delta Z(Var)';
+        if source_difference, matrix_field = 'z_var_matrix'; end
     end
     if strcmp(delta_name, 'acr_vs_wit')
         comparison = 'Across - Within';
     elseif strcmp(delta_name, 'ff_vs_fb')
         comparison = 'Feedforward - Feedback';
+    elseif source_difference
+        comparison = 'Feedforward - Within';
     else
         error('Unknown latent difference: %s.', delta_name);
     end
@@ -587,6 +767,17 @@ function P = buildPosterLatentDeltaDataLocal( ...
     P.ylabel = [prefix, ' (', comparison, ')'];
     P.neuron_counts = zeros(numel(class_names), 1);
     P.groups = cell(numel(class_names), 1);
+    if source_difference
+        if numel(delta_idx) ~= 2 || any(~isfinite(delta_idx)) || ...
+                any(delta_idx < 1 | delta_idx ~= fix(delta_idx))
+            error('FF-Within requires positive and negative source-column indices.');
+        end
+        P.balance_definition = 'use_feedforward Var - use_within Var';
+        P.stim_types = stim_types;
+        P.condition_values = cell(numel(class_names), 1);
+        P.unit_ids = cell(numel(class_names), 1);
+        P.session_index = cell(numel(class_names), 1);
+    end
 
     for c = 1:numel(class_names)
         condition_matrix = [];
@@ -600,7 +791,7 @@ function P = buildPosterLatentDeltaDataLocal( ...
             end
             C = pooled_group.stim.(stim).class.(class_names{c});
             A = C.(matrix_field);
-            if ~isnumeric(A) || size(A, 2) < delta_idx
+            if ~isnumeric(A) || size(A, 2) < max(delta_idx)
                 error('Invalid %s in %s / %s.', ...
                     matrix_field, stim, class_names{c});
             end
@@ -613,10 +804,20 @@ function P = buildPosterLatentDeltaDataLocal( ...
                 error(['Cannot average conditions: neuron or session ', ...
                     'alignment differs for class %s.'], class_names{c});
             end
-            condition_matrix(:, st) = double(A(:, delta_idx));
+            if source_difference
+                condition_matrix(:, st) = ...
+                    double(A(:, delta_idx(1))) - double(A(:, delta_idx(2)));
+            else
+                condition_matrix(:, st) = double(A(:, delta_idx));
+            end
         end
         P.groups{c, 1} = posterFiniteRowMeanLocal(condition_matrix);
         P.neuron_counts(c) = sum(isfinite(P.groups{c, 1}));
+        if source_difference
+            P.condition_values{c} = condition_matrix;
+            P.unit_ids{c} = reference_ids;
+            P.session_index{c} = reference_session;
+        end
     end
     % P/C/U are mutually exclusive; each finite class value is one neuron.
     P.legend_neuron_counts = sum(P.neuron_counts);
@@ -822,18 +1023,8 @@ function fig = plotPosterDeltaLocal(P, config, area_color, area_name)
         legend_names = {area_name};
     end
 
-    x = nan(n_outer, n_inner);
-    centers = nan(1, n_outer);
-    separators = nan(1, max(n_outer - 1, 0));
-    for i = 1:n_outer
-        x(i, :) = (i - 1) * (n_inner + 1.3) + (1:n_inner);
-        centers(i) = mean(x(i, :));
-        if i > 1
-            separators(i - 1) = ...
-                (x(i - 1, end) + x(i, 1)) / 2;
-        end
-    end
-    xlimits = [x(1, 1) - 0.65, x(end, end) + 0.65];
+    [x, centers, separators, xlimits] = posterXLayoutLocal( ...
+        n_outer, n_inner, combined_areas, config);
 
     % One shared main y range for both areas within this figure.
     y_all = vertcat(P.groups{:});
@@ -1028,6 +1219,7 @@ function fig = plotPosterDeltaLocal(P, config, area_color, area_name)
         'points_outside_main_axis', clipped_count, ...
         'show_inset', config.show_inset, 'inset_drawn', draw_inset, ...
         'x_positions', x, 'x_source_centers', centers, ...
+        'x_limits', xlimits, ...
         'statistics', P.stats);
     if panelMode, dvFitPanelLocal(fig,before,config.panel_rect); end
 end
@@ -1870,6 +2062,14 @@ function [rec, reference] = readOneSessionLocal( ...
         end
         % Preserve full direction data, then average directions equally.
         groups(g).direction_var = X;
+        if ~strcmp(variance_config.variance_denominator,'none')
+            groups(g).variance_denominator = variance_config.variance_denominator;
+            groups(g).direction_denominator_var = R.denominator_by_direction{g};
+            groups(g).direction_original_var = R.original_direction_variance{g};
+            groups(g).direction_original_all_var = R.original_direction_all_variance{g};
+            groups(g).denominator_input_unit = 'count_variance';
+            groups(g).denominator_provenance = R.denominator_provenance;
+        end
         groups(g).variance_normalization = variance_config.variance_normalization;
         groups(g).variance_unit = variance_config.variance_unit;
         groups(g).normalization_denominator = variance_config.normalization_denominator;
@@ -1912,6 +2112,10 @@ function [rec, reference] = readOneSessionLocal( ...
         normalization.variance_normalization=variance_config.variance_normalization;
         normalization.variance_unit=variance_config.variance_unit;
         normalization.normalization_denominator=variance_config.normalization_denominator;
+        if ~strcmp(variance_config.variance_denominator,'none')
+            normalization.variance_denominator=variance_config.variance_denominator;
+            normalization.input_metric='percent';
+        end
         normalization.all_latent_included=false;
         normalization.pool_mean=pool_mean; normalization.pool_sd=pool_sd;
         normalization.std_normalization=0;
@@ -1967,6 +2171,7 @@ function [rec, reference] = readOneSessionLocal( ...
     rec.variance_source = R.variance_source;
     rec.variance_unit = variance_config.variance_unit;
     rec.normalization_denominator = variance_config.normalization_denominator;
+    rec.variance_denominator = variance_config.variance_denominator;
     rec.model_mode = R.model_mode;
     rec.uncertainty_included = R.uncertainty_included;
     rec.condition_ids = R.condition_ids;
@@ -2993,14 +3198,14 @@ function R = loadNeuronVarianceLocal(sessionDir,cfg)
         X = R.direction_variance{g};
         nvSizeLocal(X,[numel(ids) 8 2 5],'per-neuron direction variance');
         nvSelectedVarianceLocal(X,'per-neuron direction variance', ...
-            strcmp(cfg.variance_normalization,'mean_count'));
+            strcmp(cfg.variance_normalization,'mean_count') || ~strcmp(cfg.variance_denominator,'none'));
         if cfg.analyze_all_latent_feature_effects && strcmp(cfg.variance_source,'model')
             R.direction_all_variance{g}=X(:,:,:,1)+X(:,:,:,2);
         end
         if cfg.analyze_all_latent_feature_effects
             nvSizeLocal(R.direction_all_variance{g},[numel(ids) 8 2],'All direction variance');
             nvSelectedVarianceLocal(R.direction_all_variance{g},'All direction variance', ...
-                strcmp(cfg.variance_normalization,'mean_count'));
+                strcmp(cfg.variance_normalization,'mean_count') || ~strcmp(cfg.variance_denominator,'none'));
         end
         % Equal-weight direction mean, not variance after concatenating trials.
         A = reshape(mean(X,3),numel(ids),8,5);
@@ -3012,6 +3217,7 @@ function R = loadNeuronVarianceLocal(sessionDir,cfg)
         end
     end
     R.variance_normalization=cfg.variance_normalization;
+    R.variance_denominator=cfg.variance_denominator;
     R.data_content = cfg.data_content; R.runIdx = cfg.runIdx;
     R.model_mode = cfg.model_mode; R.variance_source = cfg.variance_source;
     R.uncertainty_included = cfg.uncertainty_included;
@@ -3234,7 +3440,7 @@ function R = loadPosteriorNeuronVarianceLocal(sessionDir,cfg)
                     ordered=A; ordered.raw_var=Y; ordered.reconstruction_var=M; ordered.uncertainty_var=U;
                     [EY,EM,EU,count]=nvSelectExtraLocal(Extra,E,ordered,g,cfg);
                     Y=EY(:,1:5); M=EM(:,1:5); U=EU(:,1:5);
-                    if cfg.analyze_all_latent_feature_effects
+                    if cfg.analyze_all_latent_feature_effects || ~strcmp(cfg.variance_denominator,'none')
                         R.direction_all_variance{g}(:,st,d)=EY(:,6);
                     end
                     R.mean_count_by_direction{g}(:,st,d)=count;
@@ -3245,7 +3451,9 @@ function R = loadPosteriorNeuronVarianceLocal(sessionDir,cfg)
             end
         end
     end
-    if strcmp(cfg.variance_unit,'rate')
+    if ~strcmp(cfg.variance_denominator,'none')
+        R=dvApplyVarianceDenominatorLocal(R,P,Extra,cfg);
+    elseif strcmp(cfg.variance_unit,'rate')
         dt=dvBinSecondsLocal(Extra.meta,'PosteriorRawVarExtra.meta');
         R=dvScaleDirectionUnitsLocal(R,cfg,dt);
     end
@@ -3440,6 +3648,182 @@ function nvValidatePosteriorModeLocal(P,cfg,usedLegacy)
 end
 
 
+function cfg = dvDenominatorConfigLocal(cfg,denominator,normalization,unit,allEnabled)
+% The selected denominator takes precedence over response normalization/units.
+    cfg.variance_denominator=lower(strtrim(char(denominator)));
+    if ~ismember(cfg.variance_denominator,{'none','shared','total'})
+        error('variance_denominator must be ''none'', ''shared'' or ''total''.');
+    end
+    cfg.requested_variance_normalization=lower(strtrim(char(normalization)));
+    cfg.requested_variance_unit=lower(strtrim(char(unit)));
+    if strcmp(cfg.variance_denominator,'none')
+        cfg=dvExtraConfigLocal(cfg,normalization,allEnabled);
+        cfg=dvUnitConfigLocal(cfg,unit);
+        return;
+    end
+    if ~strcmp(cfg.variance_source,'posterior')
+        error(['variance_denominator=''shared''/''total'' uses saved posterior ', ...
+            'All/observed Total. For model variance select ''none''.']);
+    end
+    % Percentage inputs always read the unnormalized count fields. A common
+    % count-to-rate factor would cancel, so no rate conversion is performed.
+    cfg=dvExtraConfigLocal(cfg,'none',allEnabled);
+    cfg.variance_unit='percent';
+    cfg.unit_tag='pct';
+    cfg.normalization_tag=cfg.variance_denominator;
+    cfg.denominator_input_unit='count_variance';
+    cfg.percentage_scale=100;
+    cfg.denominator_uncertainty_included= ...
+        strcmp(cfg.variance_denominator,'shared') && cfg.uncertainty_included;
+    if strcmp(cfg.variance_denominator,'shared')
+        cfg.normalization_denominator='all_latent_shared_variance';
+    else
+        cfg.normalization_denominator='observed_total_variance';
+    end
+end
+
+function R = dvApplyVarianceDenominatorLocal(R,P,Extra,cfg)
+% Input arrays are still count variances; no direction averaging has occurred.
+    R.original_direction_all_variance=R.direction_all_variance;
+    if strcmp(cfg.variance_denominator,'shared')
+        denominator=R.direction_all_variance;
+        provenance=struct('variable','PosteriorRawVarExtra', ...
+            'column_label','All','meta',Extra.meta);
+    elseif strcmp(cfg.variance_denominator,'total')
+        [denominator,totalMeta]=dvReadTotalDenominatorLocal(R,P,Extra,cfg);
+        provenance=struct('variable','PosteriorRawVarTotal', ...
+            'column_label','Total','meta',totalMeta);
+    else
+        error('Unexpected percentage denominator: %s.',cfg.variance_denominator);
+    end
+    R.denominator_by_direction=denominator;
+    R.denominator_provenance=provenance;
+    R.variance_denominator=cfg.variance_denominator;
+    R.variance_unit='percent';
+    R.normalization_denominator=cfg.normalization_denominator;
+    for g=1:numel(cfg.group_names)
+        n=numel(R.unit_ids_by_group{g});
+        D=denominator{g};
+        nvSizeLocal(D,[n 8 2],'variance denominator');
+        nvVarianceLocal(D,'variance denominator');
+        R.direction_variance{g}=dvPercentageLocal(R.direction_variance{g},D);
+        R.direction_all_variance{g}=dvPercentageLocal(R.direction_all_variance{g},D);
+        R.reconstruction_by_direction{g}=dvPercentageLocal(R.reconstruction_by_direction{g},D);
+        R.uncertainty_by_direction{g}=dvPercentageLocal(R.uncertainty_by_direction{g},D);
+    end
+end
+
+function Y = dvPercentageLocal(X,D)
+% Preserve undefined denominators; never clamp percentages or add epsilon.
+    den=double(D);
+    den(~isfinite(den) | den<=0)=NaN;
+    Y=100.*bsxfun(@rdivide,double(X),den);
+    Y(~isfinite(Y))=NaN;
+end
+
+function [denominator,totalMeta] = dvReadTotalDenominatorLocal(R,P,Extra,cfg)
+% Observed per-bin trial variance from the same session/mode/u input file.
+% The denominator itself has no posterior-uncertainty correction.
+    filename=R.source_file;
+    names=who('-file',filename);
+    if ~ismember('PosteriorRawVarTotal',names)
+        error(['Missing PosteriorRawVarTotal in %s. Run the updated posterior_rawvar.m ', ...
+            'for this session/mode/u%d to append observed Total variance.'], ...
+            filename,cfg.uncertainty_included);
+    end
+    S=load(filename,'PosteriorRawVarTotal'); T=S.PosteriorRawVarTotal;
+    nvRequireLocal(T,{'format_version','meta','labels','condition_ids','condition'},'PosteriorRawVarTotal');
+    if ~strcmp(char(T.format_version),'posterior_rawvar_total_v1')
+        error('Unsupported PosteriorRawVarTotal format in %s.',filename);
+    end
+    m=T.meta;
+    nvRequireLocal(m,{'model_mode','data_condition','data_content','runIdx', ...
+        'variance_source','total_definition','uncertainty_included', ...
+        'source_uncertainty_included','extra_created_on','variance_method', ...
+        'variance_normalization','conditionShortLabels','dirValues'},'Total.meta');
+    if ~strcmp(char(m.model_mode),cfg.model_mode) || ...
+            ~strcmp(char(m.data_content),cfg.data_content) || m.runIdx~=cfg.runIdx || ...
+            ~strcmp(char(m.variance_source),'observed') || ...
+            ~strcmp(char(m.total_definition),'observed_y_trial_variance') || ...
+            ~isequal(double(m.uncertainty_included),0) || ...
+            ~isequal(double(m.source_uncertainty_included),double(cfg.uncertainty_included)) || ...
+            ~strcmp(char(m.variance_method),'across_trials_per_bin_mean_over_bins') || ...
+            ~strcmp(char(m.variance_normalization),'M-1')
+        error('Observed Total content/mode/run/variance/uncertainty provenance mismatch.');
+    end
+    nvRequireLocal(Extra.meta,{'created_on'},'Extra.meta');
+    if ~strcmp(char(m.extra_created_on),char(Extra.meta.created_on))
+        error('Observed Total belongs to a different Extra result; rerun posterior_rawvar.m.');
+    end
+    if strcmp(cfg.model_mode,'all_condition')
+        if ~isempty(m.data_condition)
+            error('All-condition Total must record data_condition=[].');
+        end
+    elseif ~isequal(sort(double(m.data_condition(:))),sort(double(R.condition_ids(:))))
+        error('Each-condition Total selection disagrees with its 16 conditions.');
+    end
+    nvLabelOrderLocal({'Total'},T.labels);
+    rowOrder=nvLabelOrderLocal(cfg.condition_labels,m.conditionShortLabels);
+    nvSizeLocal(T.condition_ids,[8 2],'Total.condition_ids');
+    conditionIds=double([T.condition.condition_id]);
+    if ~isequal(double(T.condition_ids(rowOrder,:)),R.condition_ids) || ...
+            ~isequal(double(m.dirValues(:)),R.direction_values(:)) || ...
+            numel(conditionIds)~=16 || numel(unique(conditionIds))~=16 || ...
+            ~isequal(sort(conditionIds(:)),sort(R.condition_ids(:)))
+        error('Observed Total condition/direction mapping differs from the numerator.');
+    end
+    dt=dvBinSecondsLocal(Extra.meta,'PosteriorRawVarExtra.meta');
+    if abs(dt-dvBinSecondsLocal(m,'PosteriorRawVarTotal.meta'))>1e-9*dt
+        error('Observed Total and component variances use different bin widths.');
+    end
+    ng=numel(cfg.group_names); denominator=cell(1,ng);
+    for g=1:ng
+        denominator{g}=nan(numel(R.unit_ids_by_group{g}),8,2);
+    end
+    for d=1:2
+        for st=1:8
+            id=R.condition_ids(st,d);
+            C=T.condition(conditionIds==id);
+            E=P.condition([P.condition.condition_id]==id);
+            nvRequireLocal(C,{'condition_id','feature_index','direction_index', ...
+                'direction_value','n_trials','n_bins','trial_ids','bestmodel_file', ...
+                'model_mode','group'},'Total.condition');
+            % Stored directories can change when sessions are moved; compare
+            % model basenames as well as condition/trial/source provenance.
+            [~,totalBase,totalExt]=fileparts(strrep(char(C.bestmodel_file),'\','/'));
+            [~,inputBase,inputExt]=fileparts(strrep(char(E.bestmodel_file),'\','/'));
+            if C.feature_index~=rowOrder(st) || C.direction_index~=d || ...
+                    C.direction_value~=R.direction_values(d) || ...
+                    C.n_trials~=E.n_trials || C.n_bins~=E.n_bins || ...
+                    ~strcmp(char(C.model_mode),cfg.model_mode) || ...
+                    ~strcmp([totalBase totalExt],[inputBase inputExt]) || ...
+                    numel(C.group)~=ng
+                error('Observed Total trials/bins/model identity differs in condition %d.',id);
+            end
+            % Total was computed from these exact observations, not a
+            % component sum or a different split of this condition.
+            if ~isfield(E,'trial_ids') || ...
+                    ~isequal(double(C.trial_ids(:)),double(E.trial_ids(:)))
+                error('Observed Total and numerator trial IDs/order differ in condition %d.',id);
+            end
+            for g=1:ng
+                B=C.group(g); ids=R.unit_ids_by_group{g}; n=numel(ids);
+                nvRequireLocal(B,{'unit_ids','n_neurons','raw_var','raw_var_by_bin'},'Total.group');
+                if ~isequal(nvIdsLocal(B.unit_ids),ids) || B.n_neurons~=n
+                    error('Observed Total and numerator neuron IDs/order differ in group %d.',g);
+                end
+                nvSizeLocal(B.raw_var,[n 1],'Total.raw_var');
+                nvSizeLocal(B.raw_var_by_bin,[n E.n_bins],'Total.raw_var_by_bin');
+                nvVarianceLocal(B.raw_var,'observed Total variance');
+                nvVarianceLocal(B.raw_var_by_bin,'observed Total bin variance');
+                nvNearLocal(double(B.raw_var),mean(double(B.raw_var_by_bin),2),'Total bin average');
+                denominator{g}(:,st,d)=double(B.raw_var);
+            end
+        end
+    end
+    totalMeta=m;
+end
+
 function cfg = dvExtraConfigLocal(cfg,normalization,allEnabled)
     cfg.variance_source = lower(strtrim(char(cfg.variance_source)));
     cfg.variance_normalization = lower(strtrim(char(normalization)));
@@ -3463,7 +3847,8 @@ end
 function E = nvReadExtraLocal(filename,P,cfg)
 % Keep the legacy five-column variable authoritative. Only new options need Extra.
     E = [];
-    if strcmp(cfg.variance_normalization,'none') && ~cfg.analyze_all_latent_feature_effects && ...
+    if strcmp(cfg.variance_denominator,'none') && ...
+            strcmp(cfg.variance_normalization,'none') && ~cfg.analyze_all_latent_feature_effects && ...
             strcmp(cfg.variance_unit,'count')
         return;
     end
@@ -3471,8 +3856,9 @@ function E = nvReadExtraLocal(filename,P,cfg)
     if ~ismember('PosteriorRawVarExtra',names)
         error(['Missing PosteriorRawVarExtra in %s. Run the updated posterior_rawvar.m ', ...
             'for this session/mode/u%d to append All and mean-count normalized results. ', ...
-            'Alternatively use variance_normalization=''none'' and ', ...
-            'analyze_all_latent_feature_effects=false for legacy inputs.'], ...
+            'For legacy inputs use variance_denominator=''none'', ', ...
+            'variance_normalization=''none'', variance_unit=''count'' and ', ...
+            'analyze_all_latent_feature_effects=false.'], ...
             filename,cfg.uncertainty_included);
     end
     S = load(filename,'PosteriorRawVarExtra'); E = S.PosteriorRawVarExtra;
@@ -3571,7 +3957,7 @@ end
 function nvSelectedVarianceLocal(X,label,allowNaN)
     if ~allowNaN, nvVarianceLocal(X,label); return; end
     if ~isnumeric(X) || ~isreal(X) || any(isinf(X(:))) || any(X(:)<0)
-        error('%s must contain nonnegative finite values or NaN for invalid mean count.',label);
+        error('%s must contain nonnegative finite values or NaN for an undefined normalization.',label);
     end
 end
 
@@ -3721,6 +4107,17 @@ function dt = dvModelBinSecondsLocal(sessionDir,meta)
 end
 
 function label = dvUnitAxisLabelLocal(label,cfg)
+    if isfield(cfg,'variance_denominator') && ~strcmp(cfg.variance_denominator,'none')
+        if strcmp(cfg.variance_denominator,'shared'), denominator='Shared';
+        else, denominator='Total'; end
+        if contains(label,'Z(Var)')
+            label=strrep(label,'Z(Var)',['Z(% of ' denominator ')']);
+        else
+            label=strrep(label,'Var',['% of ' denominator]);
+            label=[label ' (pp)'];
+        end
+        return;
+    end
     normalized=strcmp(cfg.variance_normalization,'mean_count');
     if strcmp(cfg.variance_unit,'count')
         if normalized && isempty(strfind(label,'mean count')) %#ok<STREMP>
