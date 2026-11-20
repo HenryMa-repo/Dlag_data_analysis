@@ -43,17 +43,6 @@ The required files and MATLAB toolboxes depend on the chosen analysis. The compl
 4. The `npy-matlab` reader (`readNPY`) for Kilosort `.npy` files, Expo-reading helpers such as `ReadExpoXML` and `getExpo_pulses_fix`, and recording/event helpers such as `get_eventst_GLX`. The paths to these helpers are environment-specific.
 5. For area-based unit selection, receptive-field/area-label results such as `all_unit_rf_results.mat` in each selected Kilosort folder. The related [Area-seg repository](https://github.com/HenryMa-repo/Area-seg) contains the associated area-segmentation workflow.
 
-The scripts include example local paths, stimulus tags, selected probes, and analysis parameters. Update these for your environment. Some scripts add `./expo_tools` and `./utils` relative to the current directory; ensure the required functions are actually on the MATLAB path. There is no single installation or configuration command for the entire pipeline.
-
-To check whether key dependencies can be found, for example:
-
-```matlab
-which fit_dlag -all
-which readNPY -all
-which ReadExpoXML -all
-which get_eventst_GLX -all
-```
-
 ### Expected session organization
 
 The preprocessing scripts use a session and CatGT folder layout similar to:
@@ -70,8 +59,6 @@ The preprocessing scripts use a session and CatGT folder layout similar to:
         └── <run>_g<index>_imec1/
             └── kilosort*/
 ```
-
-This is an example, not a complete file list. NIDQ metadata, sorted-unit files, `cluster_info.tsv`, Expo files, and intermediate outputs must also be available where the relevant scripts expect them. Paths and filenames are constructed from each script's settings.
 
 ## Typical workflow
 
@@ -146,17 +133,4 @@ Scripts in [session_summary/](dlag_mainheng/analysis/session_summary/) load prev
 - [sum_session_rsc.m](dlag_mainheng/analysis/session_summary/sum_session_rsc.m) for condition-wise spike-count correlations.
 - [sum_sessions_timescale_compare.m](dlag_mainheng/analysis/session_summary/sum_sessions_timescale_compare.m) and the `sum_sessions_subspace_*` scripts for timescales and subspace analyses.
 - [Varline_figure_plot.m](dlag_mainheng/analysis/session_summary/Varline_figure_plot.m) and the `GPL_class_deltaVar_*` scripts for selected variance comparisons.
-- [compare_deltaR2_with_deltaVar.m](dlag_mainheng/analysis/session_summary/compare_deltaR2_with_deltaVar.m) for neuron-matched correlations between saved stimulus-dependent ΔR² and saved variance-change measures. This script reads existing all-condition posterior summaries and reports nominal, uncorrected correlations across pooled neurons; consult its header for matching and population requirements.
-
-Set the root directory, model mode, stimulus/data settings, group order, and input-selection options to match the saved session results. Individual scripts document their required files and whether a plotted observation represents a neuron, a latent, a session, or a session–direction combination.
-
-## Interpreting the outputs
-
-- `raw_count`, `raw_fr`, z-scored fields, and demeaned fields are different inputs. For example, `demean_count_within_t_and_condition` subtracts the across-trial mean separately for each time bin and condition; it should be distinguished from demeaning across time within each trial.
-- Across and Within partition the selected shared latent categories, while Feedforward, Feedback, and Ambiguous are subdivisions of Across. These five labels therefore overlap and should not be summed as five independent categories.
-- Variance derived from model parameters, trial variance of inferred latent posterior means, and variance of reconstructed neural responses are different measures. Posterior uncertainty and normalization options depend on the script and settings. Similarly, spike-count correlation measures pairwise association; it is not the same quantity as reconstructed-response variance.
-- Some posterior-variance summaries offer raw variance, normalization by mean response, or percentages using joint All-latent reconstructed variance or observed variance as the denominator. The All-latent variance is a joint quantity and need not equal the sum of Across and Within variances.
-- Reconstruction R² is calculated relative to the grouping and denominator specified in the analysis script; it can be negative. Reconstructed contributions or their variances are not generally additive across latent categories when covariance terms are present.
-- Feedforward and feedback labels use the selected group order and inferred delay conventions. Verify those settings when interpreting directionality; a delay-based label by itself does not establish causality.
-
-Always check each script's header and saved metadata for its precise selection, normalization, trial pooling, and uncertainty conventions.
+- [compare_deltaR2_with_deltaVar.m](dlag_mainheng/analysis/session_summary/compare_deltaR2_with_deltaVar.m) for neuron-matched correlations between saved stimulus-dependent ΔR² and saved variance-change measures.
